@@ -112,7 +112,7 @@ def extract_city_and_region(text):
 
 def check_if_changed(original, matched):
     """Проверяет, изменилось ли название города"""
-    if matched is None:
+    if matched is None or matched == "❌ Нет совпадения":
         return False
     
     original_clean = original.strip()
@@ -120,18 +120,25 @@ def check_if_changed(original, matched):
     
     return original_clean != matched_clean
 
-def get_top_candidates(client_city, hh_city_names, threshold=85, limit=5):
-    """Получает топ-N кандидатов для города"""
-    candidates = process.extract(
-        client_city,
-        hh_city_names,
-        scorer=fuzz.WRatio,
-        limit=limit
-    )
+def get_candidates_by_word(client_city, hh_city_names, limit=20):
+    """Получает кандидатов по совпадению начального слова"""
+    # Извлекаем первое слово из города
+    first_word = client_city.split()[0].lower().strip()
     
-    candidates = [c for c in candidates if c[1] >= threshold]
+    # Ищем все города, содержащие это слово
+    candidates = []
+    for city_name in hh_city_names:
+        city_lower = city_name.lower()
+        if first_word in city_lower:
+            # Вычисляем процент совпадения для сортировки
+            score = fuzz.WRatio(client_city.lower(), city_lower)
+            candidates.append((city_name, score))
     
-    return candidates
+    # Сортируем по проценту совпадения
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    
+    # Ограничиваем количество
+    return candidates[:limit]
 
 def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     """Умное сопоставление города с сохранением кандидатов"""
@@ -139,7 +146,8 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     city_part, region_part = extract_city_and_region(client_city)
     city_part_lower = city_part.lower().strip()
     
-    all_candidates = get_top_candidates(client_city, hh_city_names, threshold, limit=5)
+    # Получаем кандидатов по совпадению слова
+    word_candidates = get_candidates_by_word(client_city, hh_city_names)
     
     exact_matches = []
     exact_matches_with_region = []
@@ -162,11 +170,11 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     if exact_matches_with_region:
         best_match = exact_matches_with_region[0]
         score = fuzz.WRatio(client_city.lower(), best_match.lower())
-        return (best_match, score, 0), all_candidates
+        return (best_match, score, 0), word_candidates
     elif exact_matches:
         best_match = exact_matches[0]
         score = fuzz.WRatio(client_city.lower(), best_match.lower())
-        return (best_match, score, 0), all_candidates
+        return (best_match, score, 0), word_candidates
     
     candidates = process.extract(
         client_city,
@@ -176,15 +184,15 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     )
     
     if not candidates:
-        return None, all_candidates
+        return None, word_candidates
     
     candidates = [c for c in candidates if c[1] >= threshold]
     
     if not candidates:
-        return None, all_candidates
+        return None, word_candidates
     
     if len(candidates) == 1:
-        return candidates[0], all_candidates
+        return candidates[0], word_candidates
     
     best_match = None
     best_score = 0
@@ -238,7 +246,7 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
             best_score = adjusted_score
             best_match = (candidate_name, score, _)
     
-    return (best_match if best_match else candidates[0]), all_candidates
+    return (best_match if best_match else candidates[0]), word_candidates
 
 def match_cities(client_cities, hh_areas, threshold=85):
     """Сопоставляет города с сохранением кандидатов"""
@@ -381,7 +389,8 @@ with st.sidebar:
     2. Города в первой колонке
     3. Нажмите "Начать"
     4. Редактируйте города с совпадением < 86%
-    5. Скачайте результат
+    5. Выберите "❌ Нет совпадения" если город не подходит
+    6. Скачайте результат
     """)
     
     st.markdown("---")
@@ -395,12 +404,12 @@ with st.sidebar:
     
     st.markdown("---")
     st.success("""
-    ✨ **Новое v4.0:**
+    ✨ **Новое v4.1:**
     
-    **Редактирование в таблице:**
-    - Изменяйте города с совпадением < 86%
-    - Выбор из выпадающего списка
-    - Автоматическое обновление данных
+    **Улучшенное редактирование:**
+    - Опция "❌ Нет совпадения" - город не попадет в выгрузку
+    - Поиск по начальному слову (все города с этим словом)
+    - Сортировка кандидатов по релевантности
     """)
 
 col1, col2 = st.columns([1, 1])
@@ -483,7 +492,7 @@ if uploaded_file is not None and hh_areas is not None:
                 """)
             
             st.markdown("---")
-            st.subheader("📋 Таблица сопоставлений с редактированием")
+            st.subheader("📋 Таблица сопоставлений")
             
             # Сортировка
             result_df['sort_priority'] = result_df.apply(
@@ -496,9 +505,7 @@ if uploaded_file is not None and hh_areas is not None:
                 ascending=[True, True]
             ).reset_index(drop=True)
             
-            st.info("💡 Для городов с совпадением < 86% доступен выбор из выпадающего списка ниже таблицы")
-            
-            # Показываем основную таблицу (без редактирования)
+            # Показываем основную таблицу
             display_df = result_df_sorted.copy()
             display_df = display_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
             
@@ -513,8 +520,6 @@ if uploaded_file is not None and hh_areas is not None:
                 st.info(f"Найдено **{len(editable_rows)}** городов, доступных для редактирования")
                 
                 # Создаем форму для редактирования
-                changes_made = False
-                
                 for idx, row in editable_rows.iterrows():
                     with st.container():
                         col1, col2, col3, col4 = st.columns([2, 3, 1, 1])
@@ -528,23 +533,32 @@ if uploaded_file is not None and hh_areas is not None:
                             candidates = st.session_state.candidates_cache.get(row_id, [])
                             
                             if candidates:
-                                # Формируем список опций
-                                options = [c[0] for c in candidates]
+                                # Формируем список опций с опцией "Нет совпадения"
+                                options = ["❌ Нет совпадения"] + [f"{c[0]} ({c[1]:.1f}%)" for c in candidates]
                                 
                                 # Текущее значение
                                 current_value = row['Название HH']
-                                if current_value is None:
-                                    current_value = options[0] if options else "Не найдено"
                                 
                                 # Если есть ручной выбор, используем его
                                 if row_id in st.session_state.manual_selections:
-                                    current_value = st.session_state.manual_selections[row_id]
-                                
-                                # Находим индекс текущего значения
-                                try:
-                                    default_idx = options.index(current_value)
-                                except ValueError:
+                                    selected_value = st.session_state.manual_selections[row_id]
+                                    if selected_value == "❌ Нет совпадения":
+                                        default_idx = 0
+                                    else:
+                                        # Ищем в списке кандидатов
+                                        default_idx = 0
+                                        for i, c in enumerate(candidates):
+                                            if c[0] == selected_value:
+                                                default_idx = i + 1  # +1 потому что первая опция "Нет совпадения"
+                                                break
+                                else:
+                                    # Находим индекс текущего значения
                                     default_idx = 0
+                                    if current_value:
+                                        for i, c in enumerate(candidates):
+                                            if c[0] == current_value:
+                                                default_idx = i + 1
+                                                break
                                 
                                 # Selectbox для выбора
                                 selected = st.selectbox(
@@ -556,11 +570,23 @@ if uploaded_file is not None and hh_areas is not None:
                                 )
                                 
                                 # Сохраняем выбор
-                                if selected != row['Название HH']:
-                                    st.session_state.manual_selections[row_id] = selected
-                                    changes_made = True
+                                if selected == "❌ Нет совпадения":
+                                    st.session_state.manual_selections[row_id] = "❌ Нет совпадения"
+                                else:
+                                    # Извлекаем название города без процента
+                                    selected_city = selected.rsplit(' (', 1)[0]
+                                    st.session_state.manual_selections[row_id] = selected_city
                             else:
-                                st.text("Нет кандидатов")
+                                # Если нет кандидатов, показываем только опцию "Нет совпадения"
+                                st.selectbox(
+                                    "Нет кандидатов",
+                                    options=["❌ Нет совпадения"],
+                                    index=0,
+                                    key=f"select_{row_id}",
+                                    label_visibility="collapsed",
+                                    disabled=True
+                                )
+                                st.session_state.manual_selections[row_id] = "❌ Нет совпадения"
                         
                         with col3:
                             st.text(f"{row['Совпадение %']}%")
@@ -570,8 +596,12 @@ if uploaded_file is not None and hh_areas is not None:
                         
                         st.markdown("---")
                 
-                if changes_made or st.session_state.manual_selections:
-                    st.success(f"✅ Внесено изменений: {len(st.session_state.manual_selections)}")
+                if st.session_state.manual_selections:
+                    # Подсчитываем сколько городов отмечено как "Нет совпадения"
+                    no_match_count = sum(1 for v in st.session_state.manual_selections.values() if v == "❌ Нет совпадения")
+                    changed_count = len(st.session_state.manual_selections) - no_match_count
+                    
+                    st.success(f"✅ Внесено изменений: {changed_count} | ❌ Отмечено как 'Нет совпадения': {no_match_count}")
             
             st.markdown("---")
             st.subheader("💾 Скачать результаты")
@@ -581,16 +611,27 @@ if uploaded_file is not None and hh_areas is not None:
             # Применяем ручные изменения
             final_result_df = result_df.copy()
             if st.session_state.manual_selections:
-                for row_id, new_city in st.session_state.manual_selections.items():
+                for row_id, new_value in st.session_state.manual_selections.items():
                     mask = final_result_df['row_id'] == row_id
-                    final_result_df.loc[mask, 'Название HH'] = new_city
                     
-                    if new_city in hh_areas:
-                        final_result_df.loc[mask, 'ID HH'] = hh_areas[new_city]['id']
-                        final_result_df.loc[mask, 'Регион'] = hh_areas[new_city]['parent']
-                    
-                    original = final_result_df.loc[mask, 'Исходное название'].values[0]
-                    final_result_df.loc[mask, 'Изменение'] = 'Да' if check_if_changed(original, new_city) else 'Нет'
+                    if new_value == "❌ Нет совпадения":
+                        # Помечаем как не найденное
+                        final_result_df.loc[mask, 'Название HH'] = None
+                        final_result_df.loc[mask, 'ID HH'] = None
+                        final_result_df.loc[mask, 'Регион'] = None
+                        final_result_df.loc[mask, 'Совпадение %'] = 0
+                        final_result_df.loc[mask, 'Изменение'] = 'Нет'
+                        final_result_df.loc[mask, 'Статус'] = '❌ Не найдено'
+                    else:
+                        # Применяем выбранный город
+                        final_result_df.loc[mask, 'Название HH'] = new_value
+                        
+                        if new_value in hh_areas:
+                            final_result_df.loc[mask, 'ID HH'] = hh_areas[new_value]['id']
+                            final_result_df.loc[mask, 'Регион'] = hh_areas[new_value]['parent']
+                        
+                        original = final_result_df.loc[mask, 'Исходное название'].values[0]
+                        final_result_df.loc[mask, 'Изменение'] = 'Да' if check_if_changed(original, new_value) else 'Нет'
             
             # Полный отчет
             with col1:
@@ -612,6 +653,7 @@ if uploaded_file is not None and hh_areas is not None:
             # Файл для публикатора (обычный)
             with col2:
                 unique_df = final_result_df[~final_result_df['Статус'].str.contains('Дубликат', na=False)]
+                # Убираем города с "Нет совпадения"
                 publisher_df = pd.DataFrame({'Название HH': unique_df['Название HH']})
                 publisher_df = publisher_df.dropna()
                 
@@ -665,6 +707,6 @@ if uploaded_file is not None and hh_areas is not None:
 
 st.markdown("---")
 st.markdown(
-    "Сделано с ❤️ | Данные из API HH.ru | v4.0",
+    "Сделано с ❤️ | Данные из API HH.ru | v4.1",
     unsafe_allow_html=True
 )
