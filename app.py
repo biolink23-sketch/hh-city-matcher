@@ -48,13 +48,17 @@ def get_hh_areas():
     return areas_dict
 
 def match_cities(client_cities, hh_areas, threshold=80):
-    """Сопоставляет города с обработкой дубликатов"""
+    """Сопоставляет города с двойной проверкой дубликатов"""
     results = []
     hh_city_names = list(hh_areas.keys())
     
-    # Отслеживаем уже обработанные города (нормализованные)
-    seen_cities = {}
-    duplicate_count = 0
+    # Отслеживаем дубликаты по исходному названию
+    seen_original_cities = {}
+    # Отслеживаем дубликаты по результату HH
+    seen_hh_cities = {}
+    
+    duplicate_original_count = 0
+    duplicate_hh_count = 0
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -76,20 +80,20 @@ def match_cities(client_cities, hh_areas, threshold=80):
             })
             continue
         
-        # Нормализуем: убираем пробелы и приводим к нижнему регистру для сравнения
         client_city_original = str(client_city).strip()
         client_city_normalized = client_city_original.lower().strip()
         
-        # Проверка на дубликат (сравниваем нормализованные версии)
-        if client_city_normalized in seen_cities:
-            duplicate_count += 1
+        # ПРОВЕРКА 1: Дубликат по исходному названию
+        if client_city_normalized in seen_original_cities:
+            duplicate_original_count += 1
+            original_result = seen_original_cities[client_city_normalized]
             results.append({
                 'Исходное название': client_city_original,
-                'Название HH': seen_cities[client_city_normalized]['Название HH'],
-                'ID HH': seen_cities[client_city_normalized]['ID HH'],
-                'Регион': seen_cities[client_city_normalized]['Регион'],
-                'Совпадение %': seen_cities[client_city_normalized]['Совпадение %'],
-                'Статус': '🔄 Дубликат'
+                'Название HH': original_result['Название HH'],
+                'ID HH': original_result['ID HH'],
+                'Регион': original_result['Регион'],
+                'Совпадение %': original_result['Совпадение %'],
+                'Статус': '🔄 Дубликат (исходное название)'
             })
             continue
         
@@ -105,21 +109,40 @@ def match_cities(client_cities, hh_areas, threshold=80):
             matched_name = match[0]
             score = match[1]
             hh_info = hh_areas[matched_name]
+            hh_city_normalized = hh_info['name'].lower().strip()
             
-            status = '✅ Точное' if score >= 95 else '⚠️ Похожее'
-            
-            city_result = {
-                'Исходное название': client_city_original,
-                'Название HH': hh_info['name'],
-                'ID HH': hh_info['id'],
-                'Регион': hh_info['parent'],
-                'Совпадение %': round(score, 1),
-                'Статус': status
-            }
-            
-            results.append(city_result)
-            seen_cities[client_city_normalized] = city_result
+            # ПРОВЕРКА 2: Дубликат по результату HH
+            if hh_city_normalized in seen_hh_cities:
+                duplicate_hh_count += 1
+                city_result = {
+                    'Исходное название': client_city_original,
+                    'Название HH': hh_info['name'],
+                    'ID HH': hh_info['id'],
+                    'Регион': hh_info['parent'],
+                    'Совпадение %': round(score, 1),
+                    'Статус': '🔄 Дубликат (результат HH)'
+                }
+                results.append(city_result)
+                # Сохраняем в seen_original_cities для будущих проверок
+                seen_original_cities[client_city_normalized] = city_result
+            else:
+                # Уникальный город
+                status = '✅ Точное' if score >= 95 else '⚠️ Похожее'
+                
+                city_result = {
+                    'Исходное название': client_city_original,
+                    'Название HH': hh_info['name'],
+                    'ID HH': hh_info['id'],
+                    'Регион': hh_info['parent'],
+                    'Совпадение %': round(score, 1),
+                    'Статус': status
+                }
+                
+                results.append(city_result)
+                seen_original_cities[client_city_normalized] = city_result
+                seen_hh_cities[hh_city_normalized] = True
         else:
+            # Не найдено
             city_result = {
                 'Исходное название': client_city_original,
                 'Название HH': None,
@@ -130,12 +153,14 @@ def match_cities(client_cities, hh_areas, threshold=80):
             }
             
             results.append(city_result)
-            seen_cities[client_city_normalized] = city_result
+            seen_original_cities[client_city_normalized] = city_result
     
     progress_bar.empty()
     status_text.empty()
     
-    return pd.DataFrame(results), duplicate_count
+    total_duplicates = duplicate_original_count + duplicate_hh_count
+    
+    return pd.DataFrame(results), duplicate_original_count, duplicate_hh_count, total_duplicates
 
 # ============================================
 # ИНТЕРФЕЙС
@@ -169,8 +194,17 @@ with st.sidebar:
     st.markdown("""
     - ✅ **Точное** - совпадение ≥95%
     - ⚠️ **Похожее** - совпадение ≥порога
-    - 🔄 **Дубликат** - повтор города
+    - 🔄 **Дубликат (исходное название)** - повтор в загруженном файле
+    - 🔄 **Дубликат (результат HH)** - разные названия → один город HH
     - ❌ **Не найдено** - совпадение <порога
+    """)
+    
+    st.markdown("---")
+    st.info("""
+    💡 **Два типа дубликатов:**
+    
+    1. **По исходному названию**: "Курск" встречается дважды
+    2. **По результату HH**: "Москва" и "Мск" → оба дают "Москва"
     """)
 
 # Основная область
@@ -216,16 +250,20 @@ if uploaded_file is not None and hh_areas is not None:
         # Кнопка обработки
         if st.button("🚀 Начать сопоставление", type="primary", use_container_width=True):
             with st.spinner("Обрабатываю..."):
-                result_df, duplicate_count = match_cities(client_cities, hh_areas, threshold)
+                result_df, dup_original, dup_hh, total_dup = match_cities(client_cities, hh_areas, threshold)
                 # Сохраняем в session_state
                 st.session_state.result_df = result_df
-                st.session_state.duplicate_count = duplicate_count
+                st.session_state.dup_original = dup_original
+                st.session_state.dup_hh = dup_hh
+                st.session_state.total_dup = total_dup
                 st.session_state.processed = True
         
         # Показываем результаты, если они есть в session_state
         if st.session_state.processed and st.session_state.result_df is not None:
             result_df = st.session_state.result_df
-            duplicate_count = st.session_state.duplicate_count
+            dup_original = st.session_state.dup_original
+            dup_hh = st.session_state.dup_hh
+            total_dup = st.session_state.total_dup
             
             # Статистика
             st.markdown("---")
@@ -236,7 +274,7 @@ if uploaded_file is not None and hh_areas is not None:
             total = len(result_df)
             exact = len(result_df[result_df['Статус'] == '✅ Точное'])
             similar = len(result_df[result_df['Статус'] == '⚠️ Похожее'])
-            duplicates = len(result_df[result_df['Статус'] == '🔄 Дубликат'])
+            duplicates = len(result_df[result_df['Статус'].str.contains('Дубликат', na=False)])
             not_found = len(result_df[result_df['Статус'] == '❌ Не найдено'])
             
             col1.metric("Всего", total)
@@ -245,9 +283,15 @@ if uploaded_file is not None and hh_areas is not None:
             col4.metric("🔄 Дубликатов", duplicates, f"{duplicates/total*100:.1f}%")
             col5.metric("❌ Не найдено", not_found, f"{not_found/total*100:.1f}%")
             
-            # Информация о дубликатах
+            # Детальная информация о дубликатах
             if duplicates > 0:
-                st.info(f"ℹ️ Найдено и помечено **{duplicates}** дубликатов. Они будут исключены из файла для публикатора.")
+                st.warning(f"""
+                ⚠️ **Найдено {duplicates} дубликатов:**
+                - 🔄 По исходному названию: **{dup_original}**
+                - 🔄 По результату HH: **{dup_hh}**
+                
+                Все дубликаты будут исключены из файла для публикатора.
+                """)
             
             # Таблица результатов
             st.markdown("---")
@@ -259,8 +303,20 @@ if uploaded_file is not None and hh_areas is not None:
             with filter_col1:
                 status_filter = st.multiselect(
                     "Фильтр по статусу",
-                    options=['✅ Точное', '⚠️ Похожее', '🔄 Дубликат', '❌ Не найдено'],
-                    default=['✅ Точное', '⚠️ Похожее', '🔄 Дубликат', '❌ Не найдено'],
+                    options=[
+                        '✅ Точное', 
+                        '⚠️ Похожее', 
+                        '🔄 Дубликат (исходное название)',
+                        '🔄 Дубликат (результат HH)',
+                        '❌ Не найдено'
+                    ],
+                    default=[
+                        '✅ Точное', 
+                        '⚠️ Похожее', 
+                        '🔄 Дубликат (исходное название)',
+                        '🔄 Дубликат (результат HH)',
+                        '❌ Не найдено'
+                    ],
                     key='status_filter'
                 )
             
@@ -307,8 +363,8 @@ if uploaded_file is not None and hh_areas is not None:
             
             # Файл для публикатора (только уникальные гео БЕЗ заголовка)
             with col2:
-                # Исключаем дубликаты - берем только НЕ дубликаты
-                unique_df = result_df[result_df['Статус'] != '🔄 Дубликат']
+                # Исключаем ВСЕ дубликаты (оба типа)
+                unique_df = result_df[~result_df['Статус'].str.contains('Дубликат', na=False)]
                 
                 # Создаем DataFrame только с колонкой "Название HH"
                 publisher_df = pd.DataFrame({
