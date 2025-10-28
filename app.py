@@ -1,79 +1,70 @@
-# ============================================
-# ????????? ?????????
-# ============================================
-!pip install rapidfuzz openpyxl -q
-
-# ============================================
-# ???????
-# ============================================
+import streamlit as st
 import requests
 import pandas as pd
 from rapidfuzz import fuzz, process
-from google.colab import files
 import io
 
+# Настройка страницы
+st.set_page_config(
+    page_title="Сопоставление городов с HH.ru",
+    page_icon="🌍",
+    layout="wide"
+)
+
 # ============================================
-# ????????? ??????????? HH
+# ФУНКЦИИ
 # ============================================
+@st.cache_data(ttl=3600)
 def get_hh_areas():
-    """???????? ? ?????? ?????????? ??????? ? HH.ru"""
-    print("?? ???????? ?????????? HH.ru...")
+    """Получает справочник HH.ru"""
     response = requests.get('https://api.hh.ru/areas')
     data = response.json()
     
     areas_dict = {}
     
     def parse_areas(areas, parent_name=""):
-        """?????????? ?????? ??? ??????"""
         for area in areas:
             area_id = area['id']
             area_name = area['name']
             
-            # ????????? ????? ? ID
             areas_dict[area_name] = {
                 'id': area_id,
                 'name': area_name,
                 'parent': parent_name
             }
             
-            # ?????????? ???????????? ????????? ???????
             if area.get('areas'):
                 parse_areas(area['areas'], area_name)
     
     parse_areas(data)
-    print(f"? ????????? {len(areas_dict)} ??????? ?? ??????????? HH")
     return areas_dict
 
-# ============================================
-# ????????????? ???????
-# ============================================
 def match_cities(client_cities, hh_areas, threshold=80):
-    """
-    ???????????? ?????? ??????? ?? ???????????? HH
-    
-    threshold: ??????????? ??????? ?????????? (0-100)
-    """
+    """Сопоставляет города"""
     results = []
     hh_city_names = list(hh_areas.keys())
     
-    print(f"\n?? ??????? ????????????? {len(client_cities)} ???????...")
-    print(f"?? ????? ??????????: {threshold}%\n")
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    for client_city in client_cities:
+    for idx, client_city in enumerate(client_cities):
+        progress = (idx + 1) / len(client_cities)
+        progress_bar.progress(progress)
+        status_text.text(f"Обработано {idx + 1} из {len(client_cities)} городов...")
+        
         if pd.isna(client_city) or str(client_city).strip() == "":
             results.append({
-                '???????? ????????': client_city,
-                '???????? HH': None,
+                'Исходное название': client_city,
+                'Название HH': None,
                 'ID HH': None,
-                '??????': None,
-                '?????????? %': 0,
-                '??????': '? ?????? ????????'
+                'Регион': None,
+                'Совпадение %': 0,
+                'Статус': '❌ Пустое значение'
             })
             continue
         
         client_city = str(client_city).strip()
         
-        # ???????? ?????????????
         match = process.extractOne(
             client_city,
             hh_city_names,
@@ -86,113 +77,199 @@ def match_cities(client_cities, hh_areas, threshold=80):
             score = match[1]
             hh_info = hh_areas[matched_name]
             
-            status = '? ??????' if score >= 95 else '?? ???????'
+            status = '✅ Точное' if score >= 95 else '⚠️ Похожее'
             
             results.append({
-                '???????? ????????': client_city,
-                '???????? HH': hh_info['name'],
+                'Исходное название': client_city,
+                'Название HH': hh_info['name'],
                 'ID HH': hh_info['id'],
-                '??????': hh_info['parent'],
-                '?????????? %': round(score, 1),
-                '??????': status
+                'Регион': hh_info['parent'],
+                'Совпадение %': round(score, 1),
+                'Статус': status
             })
         else:
             results.append({
-                '???????? ????????': client_city,
-                '???????? HH': None,
+                'Исходное название': client_city,
+                'Название HH': None,
                 'ID HH': None,
-                '??????': None,
-                '?????????? %': 0,
-                '??????': '? ?? ???????'
+                'Регион': None,
+                'Совпадение %': 0,
+                'Статус': '❌ Не найдено'
             })
+    
+    progress_bar.empty()
+    status_text.empty()
     
     return pd.DataFrame(results)
 
 # ============================================
-# ??????? ???????
+# ИНТЕРФЕЙС
 # ============================================
-def process_client_file(threshold=80):
-    """
-    ???????? ??????? ?????????
+
+st.title("🌍 Сопоставление городов с HH.ru")
+st.markdown("---")
+
+# Боковая панель
+with st.sidebar:
+    st.header("⚙️ Настройки")
+    threshold = st.slider(
+        "Порог совпадения (%)",
+        min_value=50,
+        max_value=100,
+        value=80,
+        help="Минимальный процент совпадения"
+    )
     
-    ?????????????? ???????: Excel (.xlsx, .xls), CSV
-    """
-    print("=" * 60)
-    print("?? ????????????? ??????? ? ???????????? HH.RU")
-    print("=" * 60)
+    st.markdown("---")
+    st.markdown("### 📖 Инструкция")
+    st.markdown("""
+    1. Загрузите Excel или CSV
+    2. Города в первой колонке
+    3. Нажмите "Начать"
+    4. Скачайте результат
+    """)
     
-    # ???????? ??????????? HH
-    hh_areas = get_hh_areas()
+    st.markdown("---")
+    st.markdown("### 📊 Статусы")
+    st.markdown("""
+    - ✅ **Точное** - совпадение ≥95%
+    - ⚠️ **Похожее** - совпадение ≥порога
+    - ❌ **Не найдено** - совпадение <порога
+    """)
+
+# Основная область
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("📤 Загрузка файла")
+    uploaded_file = st.file_uploader(
+        "Выберите файл с городами",
+        type=['xlsx', 'xls', 'csv'],
+        help="Поддерживаются форматы: Excel (.xlsx, .xls) и CSV"
+    )
     
-    # ???????? ????? ???????
-    print("\n?? ????????? ???? ?? ??????? ???????...")
-    print("??????: Excel ??? CSV, ?????? ? ?????? ???????")
-    uploaded = files.upload()
-    
-    if not uploaded:
-        print("? ???? ?? ????????")
-        return
-    
-    # ?????? ?????
-    filename = list(uploaded.keys())[0]
-    print(f"\n?? ??????????? ????: {filename}")
+    with st.expander("📋 Показать пример формата файла"):
+        example_df = pd.DataFrame({
+            'Город': ['Москва', 'Питер', 'Екатеринбург', 'Новосиб']
+        })
+        st.dataframe(example_df, use_container_width=True)
+
+with col2:
+    st.subheader("ℹ️ Информация")
+    try:
+        hh_areas = get_hh_areas()
+        st.success(f"✅ Справочник HH загружен: **{len(hh_areas)}** городов")
+    except Exception as e:
+        st.error(f"❌ Ошибка загрузки справочника: {str(e)}")
+        hh_areas = None
+
+# Обработка файла
+if uploaded_file is not None and hh_areas is not None:
+    st.markdown("---")
     
     try:
-        if filename.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(uploaded[filename]))
+        # Чтение файла
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
         else:
-            df = pd.read_excel(io.BytesIO(uploaded[filename]))
+            df = pd.read_excel(uploaded_file)
         
-        # ????? ?????? ???????
         client_cities = df.iloc[:, 0].tolist()
-        print(f"? ??????? {len(client_cities)} ???????")
+        st.info(f"📄 Загружено **{len(client_cities)}** городов из файла")
         
-        # ?????????????
-        result_df = match_cities(client_cities, hh_areas, threshold)
-        
-        # ??????????
-        print("\n" + "=" * 60)
-        print("?? ??????????:")
-        print("=" * 60)
-        total = len(result_df)
-        exact = len(result_df[result_df['??????'] == '? ??????'])
-        similar = len(result_df[result_df['??????'] == '?? ???????'])
-        not_found = len(result_df[result_df['??????'] == '? ?? ???????'])
-        
-        print(f"????? ???????: {total}")
-        print(f"? ?????? ??????????: {exact} ({exact/total*100:.1f}%)")
-        print(f"?? ???????: {similar} ({similar/total*100:.1f}%)")
-        print(f"? ?? ???????: {not_found} ({not_found/total*100:.1f}%)")
-        
-        # ?????????? ??????
-        print("\n" + "=" * 60)
-        print("?? ?????? ?????????? (?????? 10 ?????):")
-        print("=" * 60)
-        print(result_df.head(10).to_string(index=False))
-        
-        # ?????????? ??????????
-        output_filename = f"result_{filename.rsplit('.', 1)[0]}.xlsx"
-        result_df.to_excel(output_filename, index=False, engine='openpyxl')
-        
-        print(f"\n?? ????????? ???????? ?: {output_filename}")
-        print("?? ???????? ????...")
-        files.download(output_filename)
-        
-        print("\n? ??????!")
-        return result_df
-        
+        # Кнопка обработки
+        if st.button("🚀 Начать сопоставление", type="primary", use_container_width=True):
+            
+            with st.spinner("Обрабатываю..."):
+                result_df = match_cities(client_cities, hh_areas, threshold)
+            
+            # Статистика
+            st.markdown("---")
+            st.subheader("📊 Результаты")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            total = len(result_df)
+            exact = len(result_df[result_df['Статус'] == '✅ Точное'])
+            similar = len(result_df[result_df['Статус'] == '⚠️ Похожее'])
+            not_found = len(result_df[result_df['Статус'] == '❌ Не найдено'])
+            
+            col1.metric("Всего", total)
+            col2.metric("✅ Точных", exact, f"{exact/total*100:.1f}%")
+            col3.metric("⚠️ Похожих", similar, f"{similar/total*100:.1f}%")
+            col4.metric("❌ Не найдено", not_found, f"{not_found/total*100:.1f}%")
+            
+            # Таблица результатов
+            st.markdown("---")
+            st.subheader("📋 Таблица сопоставлений")
+            
+            # Фильтры
+            filter_col1, filter_col2 = st.columns(2)
+            
+            with filter_col1:
+                status_filter = st.multiselect(
+                    "Фильтр по статусу",
+                    options=['✅ Точное', '⚠️ Похожее', '❌ Не найдено'],
+                    default=['✅ Точное', '⚠️ Похожее', '❌ Не найдено']
+                )
+            
+            with filter_col2:
+                search_term = st.text_input("🔍 Поиск по названию", "")
+            
+            # Применяем фильтры
+            filtered_df = result_df[result_df['Статус'].isin(status_filter)]
+            
+            if search_term:
+                filtered_df = filtered_df[
+                    filtered_df['Исходное название'].str.contains(search_term, case=False, na=False) |
+                    filtered_df['Название HH'].str.contains(search_term, case=False, na=False)
+                ]
+            
+            # Показываем таблицу
+            st.dataframe(
+                filtered_df,
+                use_container_width=True,
+                height=400
+            )
+            
+            # Скачивание результата
+            st.markdown("---")
+            st.subheader("💾 Скачать результат")
+            
+            col1, col2 = st.columns(2)
+            
+            # Excel
+            with col1:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    result_df.to_excel(writer, index=False, sheet_name='Результат')
+                output.seek(0)
+                
+                st.download_button(
+                    label="📥 Скачать Excel",
+                    data=output,
+                    file_name=f"result_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
+            # CSV
+            with col2:
+                csv = result_df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 Скачать CSV",
+                    data=csv,
+                    file_name=f"result_{uploaded_file.name.rsplit('.', 1)[0]}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
     except Exception as e:
-        print(f"? ??????: {str(e)}")
-        return None
+        st.error(f"❌ Ошибка обработки файла: {str(e)}")
 
-# ============================================
-# ??????
-# ============================================
-# ???????? ??? ??????? ??? ????????? ?????
-# ???????? threshold - ??????????? ??????? ?????????? (?? ????????? 80)
-
-result = process_client_file(threshold=80)
-
-# ???? ?????? ???????? ????? ??????????:
-# result = process_client_file(threshold=70)  # ????? ?????? ?????
-# result = process_client_file(threshold=90)  # ????? ??????? ?????
+# Футер
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; color: gray;'>Сделано с ❤️ | Данные из API HH.ru</div>",
+    unsafe_allow_html=True
+)
