@@ -106,6 +106,29 @@ def extract_city_and_region(text):
     
     return city, region
 
+def check_if_changed(original, matched):
+    """Проверяет, изменилось ли название города (строгая проверка)"""
+    if matched is None:
+        return False
+    
+    # Убираем пробелы и приводим к нижнему регистру
+    original_clean = original.lower().strip()
+    matched_clean = matched.lower().strip()
+    
+    # Если полностью совпадают - изменения нет
+    if original_clean == matched_clean:
+        return False
+    
+    # Убираем скобки и содержимое из matched для сравнения
+    matched_base = matched.split('(')[0].strip().lower()
+    
+    # Если название города (без скобок) совпадает с оригиналом - изменения нет
+    if original_clean == matched_base:
+        return False
+    
+    # Во всех остальных случаях - изменение есть
+    return True
+
 def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     """Умное сопоставление города с приоритетом точного совпадения"""
     
@@ -138,9 +161,14 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     
     # Приоритет: сначала с совпадающим регионом, потом без
     if exact_matches_with_region:
-        return (exact_matches_with_region[0], 100.0, 0)
+        # Возвращаем реальный score из fuzzy matching
+        best_match = exact_matches_with_region[0]
+        score = fuzz.WRatio(client_city.lower(), best_match.lower())
+        return (best_match, score, 0)
     elif exact_matches:
-        return (exact_matches[0], 100.0, 0)
+        best_match = exact_matches[0]
+        score = fuzz.WRatio(client_city.lower(), best_match.lower())
+        return (best_match, score, 0)
     
     # ШАГ 2: НЕЧЕТКИЙ ПОИСК (если точного не нашли)
     candidates = process.extract(
@@ -224,28 +252,6 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     
     return best_match if best_match else candidates[0]
 
-def check_if_changed(original, matched):
-    """Проверяет, изменилось ли название города"""
-    if matched is None:
-        return False
-    
-    # Нормализуем для сравнения
-    original_normalized = original.lower().strip()
-    matched_base = matched.split('(')[0].strip().lower()
-    
-    # Если названия совпадают точно - изменения нет
-    if original_normalized == matched_base:
-        return False
-    
-    # Если название города в скобках совпадает с оригиналом - изменения нет
-    if matched_base in original_normalized or original_normalized in matched_base:
-        # Проверяем, не слишком ли разные
-        len_diff = abs(len(matched_base) - len(original_normalized))
-        if len_diff <= 3:
-            return False
-    
-    return True
-
 def match_cities(client_cities, hh_areas, threshold=85):
     """Сопоставляет города с двойной проверкой дубликатов"""
     results = []
@@ -302,7 +308,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
             hh_info = hh_areas[matched_name]
             hh_city_normalized = hh_info['name'].lower().strip()
             
-            # Проверяем изменение
+            # Проверяем изменение (строгая проверка - любое отличие = Да)
             is_changed = check_if_changed(client_city_original, hh_info['name'])
             change_status = 'Да' if is_changed else 'Нет'
             
@@ -395,22 +401,23 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🔄 Изменение")
     st.markdown("""
-    - **Да** - название было изменено
-    - **Нет** - название осталось прежним
+    - **Да** - название отличается от исходного
+    - **Нет** - название идентично
+    
+    Примеры:
+    - "Апрелевка" → "Апрелевка (Московская область)" = **Да**
+    - "Москва" → "Москва" = **Нет**
+    - "Питер" → "Санкт-Петербург" = **Да**
     """)
     
     st.markdown("---")
     st.success("""
-    ✨ **Умный поиск v2.1:**
+    ✨ **Умный поиск v2.2:**
     
     **Новое:**
-    - Столбец "Изменение" показывает, было ли изменено название
+    - Столбец "Изменение" - строгая проверка
+    - Реальный % совпадения (не всегда 100%)
     - Сортировка: сначала измененные города
-    
-    **Приоритет точного совпадения:**
-    - Сначала ищет точное название города
-    - Затем проверяет регион
-    - Только потом нечеткий поиск
     """)
 
 col1, col2 = st.columns([1, 1])
