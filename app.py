@@ -253,7 +253,7 @@ if uploaded_file is not None and hh_areas is not None:
                     use_container_width=True
                 )
             
-            # Файл для публикатора (только столбец "Название HH")
+            # Файл для публикатора (только гео БЕЗ заголовка)
             with col2:
                 # Создаем DataFrame только с колонкой "Название HH"
                 publisher_df = pd.DataFrame({
@@ -262,7 +262,8 @@ if uploaded_file is not None and hh_areas is not None:
                 
                 output_publisher = io.BytesIO()
                 with pd.ExcelWriter(output_publisher, engine='openpyxl') as writer:
-                    publisher_df.to_excel(writer, index=False, sheet_name='Гео для публикатора')
+                    # header=False убирает заголовок
+                    publisher_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
                 output_publisher.seek(0)
                 
                 st.download_button(
