@@ -47,69 +47,127 @@ def get_hh_areas():
     parse_areas(data)
     return areas_dict
 
-def smart_match_city(client_city, hh_city_names, hh_areas, threshold=80):
-    """
-    Умное сопоставление города с учетом длины и контекста
-    """
-    # Получаем топ-5 кандидатов
+def normalize_region_name(text):
+    """Нормализует название региона для сравнения"""
+    text = text.lower()
+    replacements = {
+        'ленинградская': 'ленинград',
+        'московская': 'москов',
+        'курская': 'курск',
+        'кемеровская': 'кемеров',
+        'свердловская': 'свердлов',
+        'нижегородская': 'нижегород',
+        'новосибирская': 'новосибирск',
+        'область': '',
+        'обл': '',
+        'край': '',
+        'республика': '',
+        'респ': '',
+        '  ': ' '
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text.strip()
+
+def extract_city_and_region(text):
+    """Извлекает название города и региона из текста"""
+    text_lower = text.lower()
+    
+    region_keywords = [
+        'област', 'край', 'республик', 'округ', 
+        'ленинград', 'москов', 'курск', 'кемеров',
+        'свердлов', 'нижегород', 'новосибирск'
+    ]
+    
+    words = text.split()
+    
+    if len(words) == 1:
+        return text, None
+    
+    city_words = []
+    region_words = []
+    region_found = False
+    
+    for word in words:
+        word_lower = word.lower()
+        if not region_found and any(keyword in word_lower for keyword in region_keywords):
+            region_found = True
+            region_words.append(word)
+        elif region_found:
+            region_words.append(word)
+        else:
+            city_words.append(word)
+    
+    city = ' '.join(city_words) if city_words else text
+    region = ' '.join(region_words) if region_words else None
+    
+    return city, region
+
+def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
+    """Умное сопоставление города с учетом города и региона"""
+    city_part, region_part = extract_city_and_region(client_city)
+    
     candidates = process.extract(
         client_city,
         hh_city_names,
         scorer=fuzz.WRatio,
-        limit=5
+        limit=10
     )
     
     if not candidates:
         return None
     
-    # Фильтруем по порогу
     candidates = [c for c in candidates if c[1] >= threshold]
     
     if not candidates:
         return None
     
-    # Если только один кандидат - возвращаем его
     if len(candidates) == 1:
         return candidates[0]
     
-    # УМНАЯ ЛОГИКА: выбираем лучший вариант
     best_match = None
     best_score = 0
     
     client_city_lower = client_city.lower()
+    city_part_lower = city_part.lower()
     
     for candidate_name, score, _ in candidates:
         candidate_lower = candidate_name.lower()
-        
-        # Бонусные баллы за:
         adjusted_score = score
         
-        # 1. Более длинное совпадение (например, "Железногорск (Курская область)" лучше чем "Курск")
-        if len(candidate_name) > 10 and len(client_city) > 10:
+        candidate_city = candidate_name.split('(')[0].strip().lower()
+        
+        if city_part_lower == candidate_city:
+            adjusted_score += 50
+        elif city_part_lower in candidate_city or candidate_city in city_part_lower:
+            adjusted_score += 30
+        
+        if region_part:
+            region_normalized = normalize_region_name(region_part)
+            candidate_normalized = normalize_region_name(candidate_name)
+            
+            if region_normalized in candidate_normalized:
+                adjusted_score += 40
+            elif '(' in candidate_name:
+                adjusted_score -= 20
+        
+        if len(candidate_city) > len(city_part_lower) + 4:
+            adjusted_score -= 25
+        
+        if len(candidate_name) > 15 and len(client_city) > 15:
             adjusted_score += 5
         
-        # 2. Точное вхождение основного слова
-        client_words = set(client_city_lower.split())
-        candidate_words = set(candidate_lower.replace('(', ' ').replace(')', ' ').split())
+        if len(candidate_name) < len(client_city) * 0.5:
+            adjusted_score -= 20
         
-        # Если первое слово клиента есть в кандидате - это хорошо
-        if client_words and candidate_words:
-            first_word_client = list(client_words)[0] if len(list(client_words)[0]) > 3 else None
-            if first_word_client and first_word_client in candidate_lower:
-                adjusted_score += 10
-        
-        # 3. Проверка на "короткое совпадение" - штраф
-        # Например, "Курск" не должен побеждать "Железногорск (Курская область)"
-        if len(candidate_name) < len(client_city) * 0.6:
-            adjusted_score -= 15
-        
-        # 4. Если в клиенте есть область/край, а в кандидате тоже - бонус
         region_keywords = ['област', 'край', 'республик', 'округ']
         client_has_region = any(keyword in client_city_lower for keyword in region_keywords)
         candidate_has_region = any(keyword in candidate_lower for keyword in region_keywords)
         
         if client_has_region and candidate_has_region:
             adjusted_score += 15
+        elif client_has_region and not candidate_has_region:
+            adjusted_score -= 10
         
         if adjusted_score > best_score:
             best_score = adjusted_score
@@ -117,14 +175,12 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=80):
     
     return best_match if best_match else candidates[0]
 
-def match_cities(client_cities, hh_areas, threshold=80):
+def match_cities(client_cities, hh_areas, threshold=85):
     """Сопоставляет города с двойной проверкой дубликатов"""
     results = []
     hh_city_names = list(hh_areas.keys())
     
-    # Отслеживаем дубликаты по исходному названию
     seen_original_cities = {}
-    # Отслеживаем дубликаты по результату HH
     seen_hh_cities = {}
     
     duplicate_original_count = 0
@@ -138,7 +194,6 @@ def match_cities(client_cities, hh_areas, threshold=80):
         progress_bar.progress(progress)
         status_text.text(f"Обработано {idx + 1} из {len(client_cities)} городов...")
         
-        # Обработка пустых значений
         if pd.isna(client_city) or str(client_city).strip() == "":
             results.append({
                 'Исходное название': client_city,
@@ -153,7 +208,6 @@ def match_cities(client_cities, hh_areas, threshold=80):
         client_city_original = str(client_city).strip()
         client_city_normalized = client_city_original.lower().strip()
         
-        # ПРОВЕРКА 1: Дубликат по исходному названию
         if client_city_normalized in seen_original_cities:
             duplicate_original_count += 1
             original_result = seen_original_cities[client_city_normalized]
@@ -167,7 +221,6 @@ def match_cities(client_cities, hh_areas, threshold=80):
             })
             continue
         
-        # Умное сопоставление
         match = smart_match_city(client_city_original, hh_city_names, hh_areas, threshold)
         
         if match:
@@ -176,7 +229,6 @@ def match_cities(client_cities, hh_areas, threshold=80):
             hh_info = hh_areas[matched_name]
             hh_city_normalized = hh_info['name'].lower().strip()
             
-            # ПРОВЕРКА 2: Дубликат по результату HH
             if hh_city_normalized in seen_hh_cities:
                 duplicate_hh_count += 1
                 city_result = {
@@ -188,10 +240,8 @@ def match_cities(client_cities, hh_areas, threshold=80):
                     'Статус': '🔄 Дубликат (результат HH)'
                 }
                 results.append(city_result)
-                # Сохраняем в seen_original_cities для будущих проверок
                 seen_original_cities[client_city_normalized] = city_result
             else:
-                # Уникальный город
                 status = '✅ Точное' if score >= 95 else '⚠️ Похожее'
                 
                 city_result = {
@@ -207,7 +257,6 @@ def match_cities(client_cities, hh_areas, threshold=80):
                 seen_original_cities[client_city_normalized] = city_result
                 seen_hh_cities[hh_city_normalized] = True
         else:
-            # Не найдено
             city_result = {
                 'Исходное название': client_city_original,
                 'Название HH': None,
@@ -234,14 +283,13 @@ def match_cities(client_cities, hh_areas, threshold=80):
 st.title("🌍 Сопоставление городов с HH.ru")
 st.markdown("---")
 
-# Боковая панель
 with st.sidebar:
     st.header("⚙️ Настройки")
     threshold = st.slider(
         "Порог совпадения (%)",
         min_value=50,
         max_value=100,
-        value=80,
+        value=85,  # ← ИЗМЕНЕНО на 85
         help="Минимальный процент совпадения"
     )
     
@@ -265,18 +313,18 @@ with st.sidebar:
     """)
     
     st.markdown("---")
-    st.info("""
-    💡 **Умный поиск:**
+    st.success("""
+    ✨ **Улучшенный поиск:**
     
-    Система учитывает:
-    - Длину названия
-    - Наличие области/края
-    - Точность совпадения слов
+    - Точное совпадение города: +50 баллов
+    - Совпадение региона: +40 баллов
+    - Защита от "похожих" (Клин ≠ Клинцовка)
     
-    Пример: "Железногорск Курской области" → "Железногорск (Курская область)" ✅
+    Примеры:
+    - "Кировск Ленинградская" → "Кировск (Ленинградская область)" ✅
+    - "Клин" → "Клин (Московская область)" ✅
     """)
 
-# Основная область
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -302,12 +350,10 @@ with col2:
         st.error(f"❌ Ошибка загрузки справочника: {str(e)}")
         hh_areas = None
 
-# Обработка файла
 if uploaded_file is not None and hh_areas is not None:
     st.markdown("---")
     
     try:
-        # Чтение файла
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
@@ -316,25 +362,21 @@ if uploaded_file is not None and hh_areas is not None:
         client_cities = df.iloc[:, 0].tolist()
         st.info(f"📄 Загружено **{len(client_cities)}** городов из файла")
         
-        # Кнопка обработки
         if st.button("🚀 Начать сопоставление", type="primary", use_container_width=True):
             with st.spinner("Обрабатываю..."):
                 result_df, dup_original, dup_hh, total_dup = match_cities(client_cities, hh_areas, threshold)
-                # Сохраняем в session_state
                 st.session_state.result_df = result_df
                 st.session_state.dup_original = dup_original
                 st.session_state.dup_hh = dup_hh
                 st.session_state.total_dup = total_dup
                 st.session_state.processed = True
         
-        # Показываем результаты, если они есть в session_state
         if st.session_state.processed and st.session_state.result_df is not None:
             result_df = st.session_state.result_df
             dup_original = st.session_state.dup_original
             dup_hh = st.session_state.dup_hh
             total_dup = st.session_state.total_dup
             
-            # Статистика
             st.markdown("---")
             st.subheader("📊 Результаты")
             
@@ -352,7 +394,6 @@ if uploaded_file is not None and hh_areas is not None:
             col4.metric("🔄 Дубликатов", duplicates, f"{duplicates/total*100:.1f}%")
             col5.metric("❌ Не найдено", not_found, f"{not_found/total*100:.1f}%")
             
-            # Детальная информация о дубликатах
             if duplicates > 0:
                 st.warning(f"""
                 ⚠️ **Найдено {duplicates} дубликатов:**
@@ -362,11 +403,9 @@ if uploaded_file is not None and hh_areas is not None:
                 Все дубликаты будут исключены из файла для публикатора.
                 """)
             
-            # Таблица результатов
             st.markdown("---")
             st.subheader("📋 Таблица сопоставлений")
             
-            # Фильтры
             filter_col1, filter_col2 = st.columns(2)
             
             with filter_col1:
@@ -392,7 +431,6 @@ if uploaded_file is not None and hh_areas is not None:
             with filter_col2:
                 search_term = st.text_input("🔍 Поиск по названию", "", key='search_input')
             
-            # Применяем фильтры
             filtered_df = result_df[result_df['Статус'].isin(status_filter)]
             
             if search_term:
@@ -401,20 +439,16 @@ if uploaded_file is not None and hh_areas is not None:
                     filtered_df['Название HH'].str.contains(search_term, case=False, na=False)
                 ]
             
-            # Показываем таблицу
-            st.dataframe(
-                filtered_df,
-                use_container_width=True,
-                height=400
-            )
+            # Сортируем по "Совпадение %" по возрастанию
+            filtered_df = filtered_df.sort_values(by='Совпадение %', ascending=True)
             
-            # Скачивание результата
+            st.dataframe(filtered_df, use_container_width=True, height=400)
+            
             st.markdown("---")
             st.subheader("💾 Скачать результаты")
             
             col1, col2 = st.columns(2)
             
-            # Полный отчет Excel
             with col1:
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -430,22 +464,13 @@ if uploaded_file is not None and hh_areas is not None:
                     key='download_full'
                 )
             
-            # Файл для публикатора (только уникальные гео БЕЗ заголовка)
             with col2:
-                # Исключаем ВСЕ дубликаты (оба типа)
                 unique_df = result_df[~result_df['Статус'].str.contains('Дубликат', na=False)]
-                
-                # Создаем DataFrame только с колонкой "Название HH"
-                publisher_df = pd.DataFrame({
-                    'Название HH': unique_df['Название HH']
-                })
-                
-                # Удаляем строки с None (города, которые не найдены)
+                publisher_df = pd.DataFrame({'Название HH': unique_df['Название HH']})
                 publisher_df = publisher_df.dropna()
                 
                 output_publisher = io.BytesIO()
                 with pd.ExcelWriter(output_publisher, engine='openpyxl') as writer:
-                    # header=False убирает заголовок
                     publisher_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
                 output_publisher.seek(0)
                 
@@ -464,7 +489,6 @@ if uploaded_file is not None and hh_areas is not None:
     except Exception as e:
         st.error(f"❌ Ошибка обработки файла: {str(e)}")
 
-# Футер
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray;'>Сделано с ❤️ | Данные из API HH.ru</div>",
