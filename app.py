@@ -58,6 +58,7 @@ def normalize_region_name(text):
         'свердловская': 'свердлов',
         'нижегородская': 'нижегород',
         'новосибирская': 'новосибирск',
+        'тамбовская': 'тамбов',
         'область': '',
         'обл': '',
         'край': '',
@@ -76,7 +77,7 @@ def extract_city_and_region(text):
     region_keywords = [
         'област', 'край', 'республик', 'округ', 
         'ленинград', 'москов', 'курск', 'кемеров',
-        'свердлов', 'нижегород', 'новосибирск'
+        'свердлов', 'нижегород', 'новосибирск', 'тамбов'
     ]
     
     words = text.split()
@@ -104,9 +105,39 @@ def extract_city_and_region(text):
     return city, region
 
 def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
-    """Умное сопоставление города с учетом города и региона"""
-    city_part, region_part = extract_city_and_region(client_city)
+    """Умное сопоставление города с приоритетом точного совпадения"""
     
+    city_part, region_part = extract_city_and_region(client_city)
+    city_part_lower = city_part.lower().strip()
+    
+    # ШАГ 1: ТОЧНЫЙ ПОИСК (приоритет)
+    # Ищем точное совпадение названия города (до скобок)
+    exact_matches = []
+    for hh_city_name in hh_city_names:
+        hh_city_base = hh_city_name.split('(')[0].strip().lower()
+        
+        # Точное совпадение названия города
+        if city_part_lower == hh_city_base:
+            # Если указан регион - проверяем его тоже
+            if region_part:
+                region_normalized = normalize_region_name(region_part)
+                hh_normalized = normalize_region_name(hh_city_name)
+                
+                if region_normalized in hh_normalized:
+                    # Идеальное совпадение: и город, и регион
+                    return (hh_city_name, 100.0, 0)
+                else:
+                    # Город совпадает, но регион другой - сохраняем как кандидата
+                    exact_matches.append(hh_city_name)
+            else:
+                # Город совпадает, регион не указан - берем первый вариант
+                exact_matches.append(hh_city_name)
+    
+    # Если нашли точные совпадения - возвращаем первое
+    if exact_matches:
+        return (exact_matches[0], 100.0, 0)
+    
+    # ШАГ 2: НЕЧЕТКИЙ ПОИСК (если точного не нашли)
     candidates = process.extract(
         client_city,
         hh_city_names,
@@ -125,11 +156,11 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     if len(candidates) == 1:
         return candidates[0]
     
+    # ШАГ 3: УМНЫЙ ВЫБОР из кандидатов
     best_match = None
     best_score = 0
     
     client_city_lower = client_city.lower()
-    city_part_lower = city_part.lower()
     
     for candidate_name, score, _ in candidates:
         candidate_lower = candidate_name.lower()
@@ -137,11 +168,18 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
         
         candidate_city = candidate_name.split('(')[0].strip().lower()
         
+        # КРИТЕРИЙ 1: Точное совпадение названия города
         if city_part_lower == candidate_city:
             adjusted_score += 50
-        elif city_part_lower in candidate_city or candidate_city in city_part_lower:
+        elif city_part_lower in candidate_city:
             adjusted_score += 30
+        elif candidate_city in city_part_lower:
+            adjusted_score += 20
+        else:
+            # Название города не совпадает - большой штраф
+            adjusted_score -= 30
         
+        # КРИТЕРИЙ 2: Проверка региона
         if region_part:
             region_normalized = normalize_region_name(region_part)
             candidate_normalized = normalize_region_name(candidate_name)
@@ -149,17 +187,24 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
             if region_normalized in candidate_normalized:
                 adjusted_score += 40
             elif '(' in candidate_name:
-                adjusted_score -= 20
+                # Регион указан, но не совпадает
+                adjusted_score -= 25
         
+        # КРИТЕРИЙ 3: Защита от "похожих" (Рассказовка ≠ Рассказово)
+        # Если длина отличается более чем на 3 символа - штраф
+        len_diff = abs(len(candidate_city) - len(city_part_lower))
+        if len_diff > 3:
+            adjusted_score -= 20
+        
+        # КРИТЕРИЙ 4: Проверка на вхождение (Клин vs Клинцовка)
         if len(candidate_city) > len(city_part_lower) + 4:
             adjusted_score -= 25
         
+        # КРИТЕРИЙ 5: Бонус за длинные совпадения
         if len(candidate_name) > 15 and len(client_city) > 15:
             adjusted_score += 5
         
-        if len(candidate_name) < len(client_city) * 0.5:
-            adjusted_score -= 20
-        
+        # КРИТЕРИЙ 6: Совпадение области/края
         region_keywords = ['област', 'край', 'республик', 'округ']
         client_has_region = any(keyword in client_city_lower for keyword in region_keywords)
         candidate_has_region = any(keyword in candidate_lower for keyword in region_keywords)
@@ -167,7 +212,7 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
         if client_has_region and candidate_has_region:
             adjusted_score += 15
         elif client_has_region and not candidate_has_region:
-            adjusted_score -= 10
+            adjusted_score -= 15
         
         if adjusted_score > best_score:
             best_score = adjusted_score
@@ -289,7 +334,7 @@ with st.sidebar:
         "Порог совпадения (%)",
         min_value=50,
         max_value=100,
-        value=85,  # ← ИЗМЕНЕНО на 85
+        value=85,
         help="Минимальный процент совпадения"
     )
     
@@ -314,15 +359,17 @@ with st.sidebar:
     
     st.markdown("---")
     st.success("""
-    ✨ **Улучшенный поиск:**
+    ✨ **Умный поиск v2.0:**
     
-    - Точное совпадение города: +50 баллов
-    - Совпадение региона: +40 баллов
-    - Защита от "похожих" (Клин ≠ Клинцовка)
+    **Приоритет точного совпадения:**
+    - Сначала ищет точное название города
+    - Затем проверяет регион
+    - Только потом нечеткий поиск
     
-    Примеры:
+    **Примеры:**
     - "Кировск Ленинградская" → "Кировск (Ленинградская область)" ✅
-    - "Клин" → "Клин (Московская область)" ✅
+    - "Рассказовка" → "Рассказовка" (не "Рассказово") ✅
+    - "Клин" → "Клин (Московская область)" (не "Клинцовка") ✅
     """)
 
 col1, col2 = st.columns([1, 1])
@@ -440,9 +487,26 @@ if uploaded_file is not None and hh_areas is not None:
                 ]
             
             # Сортируем по "Совпадение %" по возрастанию
-            filtered_df = filtered_df.sort_values(by='Совпадение %', ascending=True)
+            filtered_df = filtered_df.sort_values(by='Совпадение %', ascending=True).reset_index(drop=True)
             
-            st.dataframe(filtered_df, use_container_width=True, height=400)
+            st.dataframe(
+                filtered_df,
+                use_container_width=True,
+                height=400,
+                column_config={
+                    "Совпадение %": st.column_config.NumberColumn(
+                        "Совпадение %",
+                        help="Процент совпадения с базой HH",
+                        format="%.1f"
+                    ),
+                    "ID HH": st.column_config.NumberColumn(
+                        "ID HH",
+                        help="ID города в базе HH"
+                    )
+                }
+            )
+            
+            st.caption("💡 Нажмите на заголовок столбца для изменения сортировки")
             
             st.markdown("---")
             st.subheader("💾 Скачать результаты")
