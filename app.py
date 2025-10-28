@@ -59,6 +59,7 @@ def normalize_region_name(text):
         'нижегородская': 'нижегород',
         'новосибирская': 'новосибирск',
         'тамбовская': 'тамбов',
+        'красноярская': 'красноярск',
         'область': '',
         'обл': '',
         'край': '',
@@ -77,7 +78,8 @@ def extract_city_and_region(text):
     region_keywords = [
         'област', 'край', 'республик', 'округ', 
         'ленинград', 'москов', 'курск', 'кемеров',
-        'свердлов', 'нижегород', 'новосибирск', 'тамбов'
+        'свердлов', 'нижегород', 'новосибирск', 'тамбов',
+        'красноярск'
     ]
     
     words = text.split()
@@ -111,8 +113,9 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     city_part_lower = city_part.lower().strip()
     
     # ШАГ 1: ТОЧНЫЙ ПОИСК (приоритет)
-    # Ищем точное совпадение названия города (до скобок)
     exact_matches = []
+    exact_matches_with_region = []
+    
     for hh_city_name in hh_city_names:
         hh_city_base = hh_city_name.split('(')[0].strip().lower()
         
@@ -125,16 +128,18 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
                 
                 if region_normalized in hh_normalized:
                     # Идеальное совпадение: и город, и регион
-                    return (hh_city_name, 100.0, 0)
+                    exact_matches_with_region.append(hh_city_name)
                 else:
-                    # Город совпадает, но регион другой - сохраняем как кандидата
+                    # Город совпадает, но регион другой
                     exact_matches.append(hh_city_name)
             else:
-                # Город совпадает, регион не указан - берем первый вариант
+                # Город совпадает, регион не указан
                 exact_matches.append(hh_city_name)
     
-    # Если нашли точные совпадения - возвращаем первое
-    if exact_matches:
+    # Приоритет: сначала с совпадающим регионом, потом без
+    if exact_matches_with_region:
+        return (exact_matches_with_region[0], 100.0, 0)
+    elif exact_matches:
         return (exact_matches[0], 100.0, 0)
     
     # ШАГ 2: НЕЧЕТКИЙ ПОИСК (если точного не нашли)
@@ -190,13 +195,12 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
                 # Регион указан, но не совпадает
                 adjusted_score -= 25
         
-        # КРИТЕРИЙ 3: Защита от "похожих" (Рассказовка ≠ Рассказово)
-        # Если длина отличается более чем на 3 символа - штраф
+        # КРИТЕРИЙ 3: Защита от "похожих"
         len_diff = abs(len(candidate_city) - len(city_part_lower))
         if len_diff > 3:
             adjusted_score -= 20
         
-        # КРИТЕРИЙ 4: Проверка на вхождение (Клин vs Клинцовка)
+        # КРИТЕРИЙ 4: Проверка на вхождение
         if len(candidate_city) > len(city_part_lower) + 4:
             adjusted_score -= 25
         
@@ -219,6 +223,28 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
             best_match = (candidate_name, score, _)
     
     return best_match if best_match else candidates[0]
+
+def check_if_changed(original, matched):
+    """Проверяет, изменилось ли название города"""
+    if matched is None:
+        return False
+    
+    # Нормализуем для сравнения
+    original_normalized = original.lower().strip()
+    matched_base = matched.split('(')[0].strip().lower()
+    
+    # Если названия совпадают точно - изменения нет
+    if original_normalized == matched_base:
+        return False
+    
+    # Если название города в скобках совпадает с оригиналом - изменения нет
+    if matched_base in original_normalized or original_normalized in matched_base:
+        # Проверяем, не слишком ли разные
+        len_diff = abs(len(matched_base) - len(original_normalized))
+        if len_diff <= 3:
+            return False
+    
+    return True
 
 def match_cities(client_cities, hh_areas, threshold=85):
     """Сопоставляет города с двойной проверкой дубликатов"""
@@ -246,6 +272,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 'ID HH': None,
                 'Регион': None,
                 'Совпадение %': 0,
+                'Изменение': 'Нет',
                 'Статус': '❌ Пустое значение'
             })
             continue
@@ -262,6 +289,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 'ID HH': original_result['ID HH'],
                 'Регион': original_result['Регион'],
                 'Совпадение %': original_result['Совпадение %'],
+                'Изменение': original_result['Изменение'],
                 'Статус': '🔄 Дубликат (исходное название)'
             })
             continue
@@ -274,6 +302,10 @@ def match_cities(client_cities, hh_areas, threshold=85):
             hh_info = hh_areas[matched_name]
             hh_city_normalized = hh_info['name'].lower().strip()
             
+            # Проверяем изменение
+            is_changed = check_if_changed(client_city_original, hh_info['name'])
+            change_status = 'Да' if is_changed else 'Нет'
+            
             if hh_city_normalized in seen_hh_cities:
                 duplicate_hh_count += 1
                 city_result = {
@@ -282,6 +314,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
                     'ID HH': hh_info['id'],
                     'Регион': hh_info['parent'],
                     'Совпадение %': round(score, 1),
+                    'Изменение': change_status,
                     'Статус': '🔄 Дубликат (результат HH)'
                 }
                 results.append(city_result)
@@ -295,6 +328,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
                     'ID HH': hh_info['id'],
                     'Регион': hh_info['parent'],
                     'Совпадение %': round(score, 1),
+                    'Изменение': change_status,
                     'Статус': status
                 }
                 
@@ -308,6 +342,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 'ID HH': None,
                 'Регион': None,
                 'Совпадение %': 0,
+                'Изменение': 'Нет',
                 'Статус': '❌ Не найдено'
             }
             
@@ -358,18 +393,24 @@ with st.sidebar:
     """)
     
     st.markdown("---")
+    st.markdown("### 🔄 Изменение")
+    st.markdown("""
+    - **Да** - название было изменено
+    - **Нет** - название осталось прежним
+    """)
+    
+    st.markdown("---")
     st.success("""
-    ✨ **Умный поиск v2.0:**
+    ✨ **Умный поиск v2.1:**
+    
+    **Новое:**
+    - Столбец "Изменение" показывает, было ли изменено название
+    - Сортировка: сначала измененные города
     
     **Приоритет точного совпадения:**
     - Сначала ищет точное название города
     - Затем проверяет регион
     - Только потом нечеткий поиск
-    
-    **Примеры:**
-    - "Кировск Ленинградская" → "Кировск (Ленинградская область)" ✅
-    - "Рассказовка" → "Рассказовка" (не "Рассказово") ✅
-    - "Клин" → "Клин (Московская область)" (не "Клинцовка") ✅
     """)
 
 col1, col2 = st.columns([1, 1])
@@ -427,19 +468,21 @@ if uploaded_file is not None and hh_areas is not None:
             st.markdown("---")
             st.subheader("📊 Результаты")
             
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
             
             total = len(result_df)
             exact = len(result_df[result_df['Статус'] == '✅ Точное'])
             similar = len(result_df[result_df['Статус'] == '⚠️ Похожее'])
             duplicates = len(result_df[result_df['Статус'].str.contains('Дубликат', na=False)])
             not_found = len(result_df[result_df['Статус'] == '❌ Не найдено'])
+            changed = len(result_df[result_df['Изменение'] == 'Да'])
             
             col1.metric("Всего", total)
             col2.metric("✅ Точных", exact, f"{exact/total*100:.1f}%")
             col3.metric("⚠️ Похожих", similar, f"{similar/total*100:.1f}%")
             col4.metric("🔄 Дубликатов", duplicates, f"{duplicates/total*100:.1f}%")
             col5.metric("❌ Не найдено", not_found, f"{not_found/total*100:.1f}%")
+            col6.metric("🔄 Изменено", changed, f"{changed/total*100:.1f}%")
             
             if duplicates > 0:
                 st.warning(f"""
@@ -448,6 +491,13 @@ if uploaded_file is not None and hh_areas is not None:
                 - 🔄 По результату HH: **{dup_hh}**
                 
                 Все дубликаты будут исключены из файла для публикатора.
+                """)
+            
+            if changed > 0:
+                st.info(f"""
+                🔄 **Изменено названий: {changed}**
+                
+                Города с изменениями отображаются первыми в таблице.
                 """)
             
             st.markdown("---")
@@ -486,8 +536,12 @@ if uploaded_file is not None and hh_areas is not None:
                     filtered_df['Название HH'].str.contains(search_term, case=False, na=False)
                 ]
             
-            # Сортируем по "Совпадение %" по возрастанию
-            filtered_df = filtered_df.sort_values(by='Совпадение %', ascending=True).reset_index(drop=True)
+            # Сортируем: сначала с изменениями (Да), потом по "Совпадение %" по возрастанию
+            filtered_df['Изменение_sort'] = filtered_df['Изменение'].map({'Да': 0, 'Нет': 1})
+            filtered_df = filtered_df.sort_values(
+                by=['Изменение_sort', 'Совпадение %'], 
+                ascending=[True, True]
+            ).drop('Изменение_sort', axis=1).reset_index(drop=True)
             
             st.dataframe(
                 filtered_df,
@@ -502,11 +556,15 @@ if uploaded_file is not None and hh_areas is not None:
                     "ID HH": st.column_config.NumberColumn(
                         "ID HH",
                         help="ID города в базе HH"
+                    ),
+                    "Изменение": st.column_config.TextColumn(
+                        "Изменение",
+                        help="Было ли изменено название города"
                     )
                 }
             )
             
-            st.caption("💡 Нажмите на заголовок столбца для изменения сортировки")
+            st.caption("💡 Нажмите на заголовок столбца для изменения сортировки. По умолчанию: сначала измененные города.")
             
             st.markdown("---")
             st.subheader("💾 Скачать результаты")
