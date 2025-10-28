@@ -11,6 +11,14 @@ st.set_page_config(
     layout="wide"
 )
 
+# Инициализация session_state
+if 'result_df' not in st.session_state:
+    st.session_state.result_df = None
+if 'duplicate_count' not in st.session_state:
+    st.session_state.duplicate_count = 0
+if 'processed' not in st.session_state:
+    st.session_state.processed = False
+
 # ============================================
 # ФУНКЦИИ
 # ============================================
@@ -44,7 +52,7 @@ def match_cities(client_cities, hh_areas, threshold=80):
     results = []
     hh_city_names = list(hh_areas.keys())
     
-    # Отслеживаем уже обработанные города
+    # Отслеживаем уже обработанные города (нормализованные)
     seen_cities = {}
     duplicate_count = 0
     
@@ -68,24 +76,26 @@ def match_cities(client_cities, hh_areas, threshold=80):
             })
             continue
         
-        client_city_clean = str(client_city).strip()
+        # Нормализуем: убираем пробелы и приводим к нижнему регистру для сравнения
+        client_city_original = str(client_city).strip()
+        client_city_normalized = client_city_original.lower().strip()
         
-        # Проверка на дубликат
-        if client_city_clean in seen_cities:
+        # Проверка на дубликат (сравниваем нормализованные версии)
+        if client_city_normalized in seen_cities:
             duplicate_count += 1
             results.append({
-                'Исходное название': client_city_clean,
-                'Название HH': seen_cities[client_city_clean]['Название HH'],
-                'ID HH': seen_cities[client_city_clean]['ID HH'],
-                'Регион': seen_cities[client_city_clean]['Регион'],
-                'Совпадение %': seen_cities[client_city_clean]['Совпадение %'],
+                'Исходное название': client_city_original,
+                'Название HH': seen_cities[client_city_normalized]['Название HH'],
+                'ID HH': seen_cities[client_city_normalized]['ID HH'],
+                'Регион': seen_cities[client_city_normalized]['Регион'],
+                'Совпадение %': seen_cities[client_city_normalized]['Совпадение %'],
                 'Статус': '🔄 Дубликат'
             })
             continue
         
         # Нечеткое сопоставление
         match = process.extractOne(
-            client_city_clean,
+            client_city_original,
             hh_city_names,
             scorer=fuzz.WRatio,
             score_cutoff=threshold
@@ -99,7 +109,7 @@ def match_cities(client_cities, hh_areas, threshold=80):
             status = '✅ Точное' if score >= 95 else '⚠️ Похожее'
             
             city_result = {
-                'Исходное название': client_city_clean,
+                'Исходное название': client_city_original,
                 'Название HH': hh_info['name'],
                 'ID HH': hh_info['id'],
                 'Регион': hh_info['parent'],
@@ -108,10 +118,10 @@ def match_cities(client_cities, hh_areas, threshold=80):
             }
             
             results.append(city_result)
-            seen_cities[client_city_clean] = city_result
+            seen_cities[client_city_normalized] = city_result
         else:
             city_result = {
-                'Исходное название': client_city_clean,
+                'Исходное название': client_city_original,
                 'Название HH': None,
                 'ID HH': None,
                 'Регион': None,
@@ -120,7 +130,7 @@ def match_cities(client_cities, hh_areas, threshold=80):
             }
             
             results.append(city_result)
-            seen_cities[client_city_clean] = city_result
+            seen_cities[client_city_normalized] = city_result
     
     progress_bar.empty()
     status_text.empty()
@@ -205,9 +215,17 @@ if uploaded_file is not None and hh_areas is not None:
         
         # Кнопка обработки
         if st.button("🚀 Начать сопоставление", type="primary", use_container_width=True):
-            
             with st.spinner("Обрабатываю..."):
                 result_df, duplicate_count = match_cities(client_cities, hh_areas, threshold)
+                # Сохраняем в session_state
+                st.session_state.result_df = result_df
+                st.session_state.duplicate_count = duplicate_count
+                st.session_state.processed = True
+        
+        # Показываем результаты, если они есть в session_state
+        if st.session_state.processed and st.session_state.result_df is not None:
+            result_df = st.session_state.result_df
+            duplicate_count = st.session_state.duplicate_count
             
             # Статистика
             st.markdown("---")
@@ -242,11 +260,12 @@ if uploaded_file is not None and hh_areas is not None:
                 status_filter = st.multiselect(
                     "Фильтр по статусу",
                     options=['✅ Точное', '⚠️ Похожее', '🔄 Дубликат', '❌ Не найдено'],
-                    default=['✅ Точное', '⚠️ Похожее', '🔄 Дубликат', '❌ Не найдено']
+                    default=['✅ Точное', '⚠️ Похожее', '🔄 Дубликат', '❌ Не найдено'],
+                    key='status_filter'
                 )
             
             with filter_col2:
-                search_term = st.text_input("🔍 Поиск по названию", "")
+                search_term = st.text_input("🔍 Поиск по названию", "", key='search_input')
             
             # Применяем фильтры
             filtered_df = result_df[result_df['Статус'].isin(status_filter)]
@@ -282,7 +301,8 @@ if uploaded_file is not None and hh_areas is not None:
                     data=output,
                     file_name=f"result_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
+                    use_container_width=True,
+                    key='download_full'
                 )
             
             # Файл для публикатора (только уникальные гео БЕЗ заголовка)
@@ -295,13 +315,16 @@ if uploaded_file is not None and hh_areas is not None:
                     'Название HH': unique_df['Название HH']
                 })
                 
+                # Удаляем строки с None (города, которые не найдены)
+                publisher_df = publisher_df.dropna()
+                
                 output_publisher = io.BytesIO()
                 with pd.ExcelWriter(output_publisher, engine='openpyxl') as writer:
                     # header=False убирает заголовок
                     publisher_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
                 output_publisher.seek(0)
                 
-                unique_count = len(unique_df)
+                unique_count = len(publisher_df)
                 
                 st.download_button(
                     label=f"📤 Выгрузить готовый файл для публикатора ({unique_count} городов)",
@@ -309,7 +332,8 @@ if uploaded_file is not None and hh_areas is not None:
                     file_name=f"geo_for_publisher_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
-                    type="primary"
+                    type="primary",
+                    key='download_publisher'
                 )
             
     except Exception as e:
