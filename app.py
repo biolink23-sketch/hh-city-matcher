@@ -47,6 +47,76 @@ def get_hh_areas():
     parse_areas(data)
     return areas_dict
 
+def smart_match_city(client_city, hh_city_names, hh_areas, threshold=80):
+    """
+    Умное сопоставление города с учетом длины и контекста
+    """
+    # Получаем топ-5 кандидатов
+    candidates = process.extract(
+        client_city,
+        hh_city_names,
+        scorer=fuzz.WRatio,
+        limit=5
+    )
+    
+    if not candidates:
+        return None
+    
+    # Фильтруем по порогу
+    candidates = [c for c in candidates if c[1] >= threshold]
+    
+    if not candidates:
+        return None
+    
+    # Если только один кандидат - возвращаем его
+    if len(candidates) == 1:
+        return candidates[0]
+    
+    # УМНАЯ ЛОГИКА: выбираем лучший вариант
+    best_match = None
+    best_score = 0
+    
+    client_city_lower = client_city.lower()
+    
+    for candidate_name, score, _ in candidates:
+        candidate_lower = candidate_name.lower()
+        
+        # Бонусные баллы за:
+        adjusted_score = score
+        
+        # 1. Более длинное совпадение (например, "Железногорск (Курская область)" лучше чем "Курск")
+        if len(candidate_name) > 10 and len(client_city) > 10:
+            adjusted_score += 5
+        
+        # 2. Точное вхождение основного слова
+        client_words = set(client_city_lower.split())
+        candidate_words = set(candidate_lower.replace('(', ' ').replace(')', ' ').split())
+        
+        # Если первое слово клиента есть в кандидате - это хорошо
+        if client_words and candidate_words:
+            first_word_client = list(client_words)[0] if len(list(client_words)[0]) > 3 else None
+            if first_word_client and first_word_client in candidate_lower:
+                adjusted_score += 10
+        
+        # 3. Проверка на "короткое совпадение" - штраф
+        # Например, "Курск" не должен побеждать "Железногорск (Курская область)"
+        if len(candidate_name) < len(client_city) * 0.6:
+            adjusted_score -= 15
+        
+        # 4. Если в клиенте есть область/край, а в кандидате тоже - бонус
+        region_keywords = ['област', 'край', 'республик', 'округ']
+        client_has_region = any(keyword in client_city_lower for keyword in region_keywords)
+        candidate_has_region = any(keyword in candidate_lower for keyword in region_keywords)
+        
+        if client_has_region and candidate_has_region:
+            adjusted_score += 15
+        
+        if adjusted_score > best_score:
+            best_score = adjusted_score
+            best_match = (candidate_name, score, _)
+    
+    return best_match if best_match else candidates[0]
+
 def match_cities(client_cities, hh_areas, threshold=80):
     """Сопоставляет города с двойной проверкой дубликатов"""
     results = []
@@ -97,13 +167,8 @@ def match_cities(client_cities, hh_areas, threshold=80):
             })
             continue
         
-        # Нечеткое сопоставление
-        match = process.extractOne(
-            client_city_original,
-            hh_city_names,
-            scorer=fuzz.WRatio,
-            score_cutoff=threshold
-        )
+        # Умное сопоставление
+        match = smart_match_city(client_city_original, hh_city_names, hh_areas, threshold)
         
         if match:
             matched_name = match[0]
@@ -201,10 +266,14 @@ with st.sidebar:
     
     st.markdown("---")
     st.info("""
-    💡 **Два типа дубликатов:**
+    💡 **Умный поиск:**
     
-    1. **По исходному названию**: "Курск" встречается дважды
-    2. **По результату HH**: "Москва" и "Мск" → оба дают "Москва"
+    Система учитывает:
+    - Длину названия
+    - Наличие области/края
+    - Точность совпадения слов
+    
+    Пример: "Железногорск Курской области" → "Железногорск (Курская область)" ✅
     """)
 
 # Основная область
