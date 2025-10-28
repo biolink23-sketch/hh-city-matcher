@@ -18,6 +18,10 @@ if 'duplicate_count' not in st.session_state:
     st.session_state.duplicate_count = 0
 if 'processed' not in st.session_state:
     st.session_state.processed = False
+if 'manual_selections' not in st.session_state:
+    st.session_state.manual_selections = {}
+if 'candidates_cache' not in st.session_state:
+    st.session_state.candidates_cache = {}
 
 # ============================================
 # ФУНКЦИИ
@@ -107,59 +111,63 @@ def extract_city_and_region(text):
     return city, region
 
 def check_if_changed(original, matched):
-    """Проверяет, изменилось ли название города - ПРОСТОЕ СРАВНЕНИЕ"""
+    """Проверяет, изменилось ли название города"""
     if matched is None:
         return False
     
-    # Простое сравнение строк
     original_clean = original.strip()
     matched_clean = matched.strip()
     
-    # Если строки идентичны - изменения нет
-    # Если отличаются хоть чем-то - изменение есть
     return original_clean != matched_clean
 
+def get_top_candidates(client_city, hh_city_names, threshold=85, limit=5):
+    """Получает топ-N кандидатов для города"""
+    candidates = process.extract(
+        client_city,
+        hh_city_names,
+        scorer=fuzz.WRatio,
+        limit=limit
+    )
+    
+    candidates = [c for c in candidates if c[1] >= threshold]
+    
+    return candidates
+
 def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
-    """Умное сопоставление города с приоритетом точного совпадения"""
+    """Умное сопоставление города с сохранением кандидатов"""
     
     city_part, region_part = extract_city_and_region(client_city)
     city_part_lower = city_part.lower().strip()
     
-    # ШАГ 1: ТОЧНЫЙ ПОИСК (приоритет)
+    all_candidates = get_top_candidates(client_city, hh_city_names, threshold, limit=5)
+    
     exact_matches = []
     exact_matches_with_region = []
     
     for hh_city_name in hh_city_names:
         hh_city_base = hh_city_name.split('(')[0].strip().lower()
         
-        # Точное совпадение названия города
         if city_part_lower == hh_city_base:
-            # Если указан регион - проверяем его тоже
             if region_part:
                 region_normalized = normalize_region_name(region_part)
                 hh_normalized = normalize_region_name(hh_city_name)
                 
                 if region_normalized in hh_normalized:
-                    # Идеальное совпадение: и город, и регион
                     exact_matches_with_region.append(hh_city_name)
                 else:
-                    # Город совпадает, но регион другой
                     exact_matches.append(hh_city_name)
             else:
-                # Город совпадает, регион не указан
                 exact_matches.append(hh_city_name)
     
-    # Приоритет: сначала с совпадающим регионом, потом без
     if exact_matches_with_region:
         best_match = exact_matches_with_region[0]
         score = fuzz.WRatio(client_city.lower(), best_match.lower())
-        return (best_match, score, 0)
+        return (best_match, score, 0), all_candidates
     elif exact_matches:
         best_match = exact_matches[0]
         score = fuzz.WRatio(client_city.lower(), best_match.lower())
-        return (best_match, score, 0)
+        return (best_match, score, 0), all_candidates
     
-    # ШАГ 2: НЕЧЕТКИЙ ПОИСК (если точного не нашли)
     candidates = process.extract(
         client_city,
         hh_city_names,
@@ -168,17 +176,16 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     )
     
     if not candidates:
-        return None
+        return None, all_candidates
     
     candidates = [c for c in candidates if c[1] >= threshold]
     
     if not candidates:
-        return None
+        return None, all_candidates
     
     if len(candidates) == 1:
-        return candidates[0]
+        return candidates[0], all_candidates
     
-    # ШАГ 3: УМНЫЙ ВЫБОР из кандидатов
     best_match = None
     best_score = 0
     
@@ -190,7 +197,6 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
         
         candidate_city = candidate_name.split('(')[0].strip().lower()
         
-        # КРИТЕРИЙ 1: Точное совпадение названия города
         if city_part_lower == candidate_city:
             adjusted_score += 50
         elif city_part_lower in candidate_city:
@@ -200,7 +206,6 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
         else:
             adjusted_score -= 30
         
-        # КРИТЕРИЙ 2: Проверка региона
         if region_part:
             region_normalized = normalize_region_name(region_part)
             candidate_normalized = normalize_region_name(candidate_name)
@@ -210,20 +215,16 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
             elif '(' in candidate_name:
                 adjusted_score -= 25
         
-        # КРИТЕРИЙ 3: Защита от "похожих"
         len_diff = abs(len(candidate_city) - len(city_part_lower))
         if len_diff > 3:
             adjusted_score -= 20
         
-        # КРИТЕРИЙ 4: Проверка на вхождение
         if len(candidate_city) > len(city_part_lower) + 4:
             adjusted_score -= 25
         
-        # КРИТЕРИЙ 5: Бонус за длинные совпадения
         if len(candidate_name) > 15 and len(client_city) > 15:
             adjusted_score += 5
         
-        # КРИТЕРИЙ 6: Совпадение области/края
         region_keywords = ['област', 'край', 'республик', 'округ']
         client_has_region = any(keyword in client_city_lower for keyword in region_keywords)
         candidate_has_region = any(keyword in candidate_lower for keyword in region_keywords)
@@ -237,10 +238,10 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
             best_score = adjusted_score
             best_match = (candidate_name, score, _)
     
-    return best_match if best_match else candidates[0]
+    return (best_match if best_match else candidates[0]), all_candidates
 
 def match_cities(client_cities, hh_areas, threshold=85):
-    """Сопоставляет города с двойной проверкой дубликатов"""
+    """Сопоставляет города с сохранением кандидатов"""
     results = []
     hh_city_names = list(hh_areas.keys())
     
@@ -249,6 +250,8 @@ def match_cities(client_cities, hh_areas, threshold=85):
     
     duplicate_original_count = 0
     duplicate_hh_count = 0
+    
+    st.session_state.candidates_cache = {}
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -266,7 +269,8 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 'Регион': None,
                 'Совпадение %': 0,
                 'Изменение': 'Нет',
-                'Статус': '❌ Пустое значение'
+                'Статус': '❌ Пустое значение',
+                'row_id': idx
             })
             continue
         
@@ -283,19 +287,21 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 'Регион': original_result['Регион'],
                 'Совпадение %': original_result['Совпадение %'],
                 'Изменение': original_result['Изменение'],
-                'Статус': '🔄 Дубликат (исходное название)'
+                'Статус': '🔄 Дубликат (исходное название)',
+                'row_id': idx
             })
             continue
         
-        match = smart_match_city(client_city_original, hh_city_names, hh_areas, threshold)
+        match_result, candidates = smart_match_city(client_city_original, hh_city_names, hh_areas, threshold)
         
-        if match:
-            matched_name = match[0]
-            score = match[1]
+        st.session_state.candidates_cache[idx] = candidates
+        
+        if match_result:
+            matched_name = match_result[0]
+            score = match_result[1]
             hh_info = hh_areas[matched_name]
             hh_city_normalized = hh_info['name'].lower().strip()
             
-            # ПРОСТАЯ ПРОВЕРКА: строки идентичны или нет
             is_changed = check_if_changed(client_city_original, hh_info['name'])
             change_status = 'Да' if is_changed else 'Нет'
             
@@ -308,7 +314,8 @@ def match_cities(client_cities, hh_areas, threshold=85):
                     'Регион': hh_info['parent'],
                     'Совпадение %': round(score, 1),
                     'Изменение': change_status,
-                    'Статус': '🔄 Дубликат (результат HH)'
+                    'Статус': '🔄 Дубликат (результат HH)',
+                    'row_id': idx
                 }
                 results.append(city_result)
                 seen_original_cities[client_city_normalized] = city_result
@@ -322,7 +329,8 @@ def match_cities(client_cities, hh_areas, threshold=85):
                     'Регион': hh_info['parent'],
                     'Совпадение %': round(score, 1),
                     'Изменение': change_status,
-                    'Статус': status
+                    'Статус': status,
+                    'row_id': idx
                 }
                 
                 results.append(city_result)
@@ -336,7 +344,8 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 'Регион': None,
                 'Совпадение %': 0,
                 'Изменение': 'Нет',
-                'Статус': '❌ Не найдено'
+                'Статус': '❌ Не найдено',
+                'row_id': idx
             }
             
             results.append(city_result)
@@ -372,39 +381,27 @@ with st.sidebar:
     1. Загрузите Excel или CSV
     2. Города в первой колонке
     3. Нажмите "Начать"
-    4. Скачайте результат
+    4. Для городов со статусом "⚠️ Похожее" можно выбрать другой вариант
+    5. Скачайте результат
     """)
     
     st.markdown("---")
     st.markdown("### 📊 Статусы")
     st.markdown("""
     - ✅ **Точное** - совпадение ≥95%
-    - ⚠️ **Похожее** - совпадение ≥порога
-    - 🔄 **Дубликат (исходное название)** - повтор в загруженном файле
-    - 🔄 **Дубликат (результат HH)** - разные названия → один город HH
+    - ⚠️ **Похожее** - совпадение ≥порога (можно выбрать вручную)
+    - 🔄 **Дубликат** - повторы
     - ❌ **Не найдено** - совпадение <порога
     """)
     
     st.markdown("---")
-    st.markdown("### 🔄 Изменение")
-    st.markdown("""
-    - **Да** - "Исходное название" ≠ "Название HH"
-    - **Нет** - строки идентичны
-    
-    Примеры:
-    - "Апрелевка" → "Апрелевка (Московская область)" = **Да** ✅
-    - "Москва" → "Москва" = **Нет** ✅
-    - "Питер" → "Санкт-Петербург" = **Да** ✅
-    - "Балашиха" → "Балашиха (Московская область)" = **Да** ✅
-    """)
-    
-    st.markdown("---")
     st.success("""
-    ✨ **Умный поиск v2.3:**
+    ✨ **Новое v3.0:**
     
-    **Изменение = простое сравнение строк**
-    - Если строки не идентичны → "Да"
-    - Если идентичны → "Нет"
+    **Ручной выбор городов:**
+    - Для статуса "⚠️ Похожее" доступен выбор из вариантов
+    - Кнопка "Сгенерировать файл с ручными изменениями"
+    - Сортировка: сначала не найденные, потом с изменениями
     """)
 
 col1, col2 = st.columns([1, 1])
@@ -452,9 +449,10 @@ if uploaded_file is not None and hh_areas is not None:
                 st.session_state.dup_hh = dup_hh
                 st.session_state.total_dup = total_dup
                 st.session_state.processed = True
+                st.session_state.manual_selections = {}
         
         if st.session_state.processed and st.session_state.result_df is not None:
-            result_df = st.session_state.result_df
+            result_df = st.session_state.result_df.copy()
             dup_original = st.session_state.dup_original
             dup_hh = st.session_state.dup_hh
             total_dup = st.session_state.total_dup
@@ -483,96 +481,92 @@ if uploaded_file is not None and hh_areas is not None:
                 ⚠️ **Найдено {duplicates} дубликатов:**
                 - 🔄 По исходному названию: **{dup_original}**
                 - 🔄 По результату HH: **{dup_hh}**
-                
-                Все дубликаты будут исключены из файла для публикатора.
-                """)
-            
-            if changed > 0:
-                st.info(f"""
-                🔄 **Изменено названий: {changed}**
-                
-                Города с изменениями отображаются первыми в таблице.
                 """)
             
             st.markdown("---")
-            st.subheader("📋 Таблица сопоставлений")
+            st.subheader("📋 Таблица сопоставлений с ручным выбором")
             
-            filter_col1, filter_col2 = st.columns(2)
-            
-            with filter_col1:
-                status_filter = st.multiselect(
-                    "Фильтр по статусу",
-                    options=[
-                        '✅ Точное', 
-                        '⚠️ Похожее', 
-                        '🔄 Дубликат (исходное название)',
-                        '🔄 Дубликат (результат HH)',
-                        '❌ Не найдено'
-                    ],
-                    default=[
-                        '✅ Точное', 
-                        '⚠️ Похожее', 
-                        '🔄 Дубликат (исходное название)',
-                        '🔄 Дубликат (результат HH)',
-                        '❌ Не найдено'
-                    ],
-                    key='status_filter'
-                )
-            
-            with filter_col2:
-                search_term = st.text_input("🔍 Поиск по названию", "", key='search_input')
-            
-            filtered_df = result_df[result_df['Статус'].isin(status_filter)]
-            
-            if search_term:
-                filtered_df = filtered_df[
-                    filtered_df['Исходное название'].str.contains(search_term, case=False, na=False) |
-                    filtered_df['Название HH'].str.contains(search_term, case=False, na=False)
-                ]
-            
-            # Сортируем: сначала с изменениями (Да), потом по "Совпадение %" по возрастанию
-            filtered_df['Изменение_sort'] = filtered_df['Изменение'].map({'Да': 0, 'Нет': 1})
-            filtered_df = filtered_df.sort_values(
-                by=['Изменение_sort', 'Совпадение %'], 
-                ascending=[True, True]
-            ).drop('Изменение_sort', axis=1).reset_index(drop=True)
-            
-            st.dataframe(
-                filtered_df,
-                use_container_width=True,
-                height=400,
-                column_config={
-                    "Совпадение %": st.column_config.NumberColumn(
-                        "Совпадение %",
-                        help="Процент совпадения с базой HH",
-                        format="%.1f"
-                    ),
-                    "ID HH": st.column_config.NumberColumn(
-                        "ID HH",
-                        help="ID города в базе HH"
-                    ),
-                    "Изменение": st.column_config.TextColumn(
-                        "Изменение",
-                        help="Было ли изменено название города"
-                    )
-                }
+            # НОВАЯ СОРТИРОВКА
+            result_df['sort_priority'] = result_df.apply(
+                lambda row: 0 if row['Совпадение %'] == 0 else (1 if row['Изменение'] == 'Да' else 2),
+                axis=1
             )
             
-            st.caption("💡 Нажмите на заголовок столбца для изменения сортировки. По умолчанию: сначала измененные города.")
+            result_df_sorted = result_df.sort_values(
+                by=['sort_priority', 'Совпадение %'], 
+                ascending=[True, True]
+            ).reset_index(drop=True)
+            
+            st.info("💡 Для городов со статусом '⚠️ Похожее' вы можете выбрать другой вариант из списка ниже")
+            
+            # Отображаем строки с возможностью выбора
+            has_manual_changes = False
+            
+            for idx, row in result_df_sorted.iterrows():
+                if row['Статус'] == '⚠️ Похожее' and row['row_id'] in st.session_state.candidates_cache:
+                    has_manual_changes = True
+                    
+                    col1, col2, col3 = st.columns([2, 3, 1])
+                    
+                    with col1:
+                        st.text(f"🔸 {row['Исходное название']}")
+                    
+                    with col2:
+                        candidates = st.session_state.candidates_cache[row['row_id']]
+                        
+                        if candidates:
+                            options = [f"{c[0]} ({c[1]:.1f}%)" for c in candidates]
+                            current_value = row['Название HH']
+                            
+                            # Находим индекс текущего значения
+                            default_idx = 0
+                            for i, c in enumerate(candidates):
+                                if c[0] == current_value:
+                                    default_idx = i
+                                    break
+                            
+                            selected = st.selectbox(
+                                "Выберите город:",
+                                options=options,
+                                index=default_idx,
+                                key=f"select_{row['row_id']}",
+                                label_visibility="collapsed"
+                            )
+                            
+                            # Сохраняем выбор
+                            selected_city = selected.split(' (')[0]
+                            if selected_city != current_value:
+                                st.session_state.manual_selections[row['row_id']] = selected_city
+                            elif row['row_id'] in st.session_state.manual_selections:
+                                del st.session_state.manual_selections[row['row_id']]
+                    
+                    with col3:
+                        st.text(f"{row['Совпадение %']}%")
+                    
+                    st.markdown("---")
+            
+            # Показываем обычную таблицу для остальных
+            display_df = result_df_sorted[result_df_sorted['Статус'] != '⚠️ Похожее'].copy()
+            display_df = display_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
+            
+            if not display_df.empty:
+                st.dataframe(display_df, use_container_width=True, height=300)
             
             st.markdown("---")
             st.subheader("💾 Скачать результаты")
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
+            # Полный отчет
             with col1:
                 output = io.BytesIO()
+                final_df = result_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    result_df.to_excel(writer, index=False, sheet_name='Результат')
+                    final_df.to_excel(writer, index=False, sheet_name='Результат')
                 output.seek(0)
                 
                 st.download_button(
-                    label="📥 Скачать полный отчет (Excel)",
+                    label="📥 Скачать полный отчет",
                     data=output,
                     file_name=f"result_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -580,6 +574,7 @@ if uploaded_file is not None and hh_areas is not None:
                     key='download_full'
                 )
             
+            # Файл для публикатора (обычный)
             with col2:
                 unique_df = result_df[~result_df['Статус'].str.contains('Дубликат', na=False)]
                 publisher_df = pd.DataFrame({'Название HH': unique_df['Название HH']})
@@ -593,14 +588,57 @@ if uploaded_file is not None and hh_areas is not None:
                 unique_count = len(publisher_df)
                 
                 st.download_button(
-                    label=f"📤 Выгрузить готовый файл для публикатора ({unique_count} городов)",
+                    label=f"📤 Файл для публикатора ({unique_count})",
                     data=output_publisher,
                     file_name=f"geo_for_publisher_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
-                    type="primary",
                     key='download_publisher'
                 )
+            
+            # Файл с ручными изменениями
+            with col3:
+                if st.session_state.manual_selections:
+                    # Применяем ручные изменения
+                    manual_df = result_df.copy()
+                    
+                    for row_id, new_city in st.session_state.manual_selections.items():
+                        mask = manual_df['row_id'] == row_id
+                        manual_df.loc[mask, 'Название HH'] = new_city
+                        
+                        # Обновляем ID и регион
+                        if new_city in hh_areas:
+                            manual_df.loc[mask, 'ID HH'] = hh_areas[new_city]['id']
+                            manual_df.loc[mask, 'Регион'] = hh_areas[new_city]['parent']
+                        
+                        # Обновляем изменение
+                        original = manual_df.loc[mask, 'Исходное название'].values[0]
+                        manual_df.loc[mask, 'Изменение'] = 'Да' if check_if_changed(original, new_city) else 'Нет'
+                    
+                    # Убираем дубликаты
+                    unique_manual_df = manual_df[~manual_df['Статус'].str.contains('Дубликат', na=False)]
+                    publisher_manual_df = pd.DataFrame({'Название HH': unique_manual_df['Название HH']})
+                    publisher_manual_df = publisher_manual_df.dropna()
+                    
+                    output_manual = io.BytesIO()
+                    with pd.ExcelWriter(output_manual, engine='openpyxl') as writer:
+                        publisher_manual_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
+                    output_manual.seek(0)
+                    
+                    manual_count = len(publisher_manual_df)
+                    changes_count = len(st.session_state.manual_selections)
+                    
+                    st.download_button(
+                        label=f"✏️ С ручными изменениями ({changes_count} изм.)",
+                        data=output_manual,
+                        file_name=f"geo_manual_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        type="primary",
+                        key='download_manual'
+                    )
+                else:
+                    st.info("Нет ручных изменений")
             
     except Exception as e:
         st.error(f"❌ Ошибка обработки файла: {str(e)}")
