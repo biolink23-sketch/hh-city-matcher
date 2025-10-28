@@ -22,6 +22,8 @@ if 'manual_selections' not in st.session_state:
     st.session_state.manual_selections = {}
 if 'candidates_cache' not in st.session_state:
     st.session_state.candidates_cache = {}
+if 'edited_df' not in st.session_state:
+    st.session_state.edited_df = None
 
 # ============================================
 # ФУНКЦИИ
@@ -80,7 +82,7 @@ def extract_city_and_region(text):
     text_lower = text.lower()
     
     region_keywords = [
-        'област', 'край', 'республик', 'округ', 
+        'област', 'край', 'республик', 'округ',
         'ленинград', 'москов', 'курск', 'кемеров',
         'свердлов', 'нижегород', 'новосибирск', 'тамбов',
         'красноярск'
@@ -358,10 +360,17 @@ def match_cities(client_cities, hh_areas, threshold=85):
     
     return pd.DataFrame(results), duplicate_original_count, duplicate_hh_count, total_duplicates
 
+def create_editable_options(row_id, hh_areas):
+    """Создает список опций для выбора из кандидатов"""
+    if row_id not in st.session_state.candidates_cache:
+        return []
+    
+    candidates = st.session_state.candidates_cache[row_id]
+    return [c[0] for c in candidates] if candidates else []
+
 # ============================================
 # ИНТЕРФЕЙС
 # ============================================
-
 st.title("🌍 Сопоставление городов с HH.ru")
 st.markdown("---")
 
@@ -381,7 +390,7 @@ with st.sidebar:
     1. Загрузите Excel или CSV
     2. Города в первой колонке
     3. Нажмите "Начать"
-    4. Для городов со статусом "⚠️ Похожее" можно выбрать другой вариант
+    4. Редактируйте города с совпадением < 86% прямо в таблице
     5. Скачайте результат
     """)
     
@@ -389,18 +398,19 @@ with st.sidebar:
     st.markdown("### 📊 Статусы")
     st.markdown("""
     - ✅ **Точное** - совпадение ≥95%
-    - ⚠️ **Похожее** - совпадение ≥порога (можно выбрать вручную)
+    - ⚠️ **Похожее** - совпадение ≥порога (можно редактировать)
     - 🔄 **Дубликат** - повторы
     - ❌ **Не найдено** - совпадение <порога
     """)
     
     st.markdown("---")
     st.success("""
-    ✨ **Новое v3.0:**
+    ✨ **Новое v4.0:**
     
-    **Ручной выбор городов:**
-    - Для статуса "⚠️ Похожее" доступен выбор из вариантов
-    - Кнопка "Сгенерировать файл с ручными изменениями"
+    **Редактирование в таблице:**
+    - Изменяйте города с совпадением < 86% прямо в таблице
+    - Выбор из выпадающего списка кандидатов
+    - Автоматическое обновление ID и региона
     - Сортировка: сначала не найденные, потом с изменениями
     """)
 
@@ -450,6 +460,7 @@ if uploaded_file is not None and hh_areas is not None:
                 st.session_state.total_dup = total_dup
                 st.session_state.processed = True
                 st.session_state.manual_selections = {}
+                st.session_state.edited_df = None
         
         if st.session_state.processed and st.session_state.result_df is not None:
             result_df = st.session_state.result_df.copy()
@@ -484,85 +495,153 @@ if uploaded_file is not None and hh_areas is not None:
                 """)
             
             st.markdown("---")
-            st.subheader("📋 Таблица сопоставлений с ручным выбором")
+            st.subheader("📋 Редактируемая таблица сопоставлений")
             
-            # НОВАЯ СОРТИРОВКА
+            # Сортировка
             result_df['sort_priority'] = result_df.apply(
                 lambda row: 0 if row['Совпадение %'] == 0 else (1 if row['Изменение'] == 'Да' else 2),
                 axis=1
             )
             
             result_df_sorted = result_df.sort_values(
-                by=['sort_priority', 'Совпадение %'], 
+                by=['sort_priority', 'Совпадение %'],
                 ascending=[True, True]
             ).reset_index(drop=True)
             
-            st.info("💡 Для городов со статусом '⚠️ Похожее' вы можете выбрать другой вариант из списка ниже")
+            # Подготовка данных для редактирования
+            editable_df = result_df_sorted.copy()
             
-            # Отображаем строки с возможностью выбора
-            has_manual_changes = False
+            # Создаем колонку с признаком редактируемости
+            editable_df['Можно редактировать'] = editable_df['Совпадение %'] < 86
             
-            for idx, row in result_df_sorted.iterrows():
-                if row['Статус'] == '⚠️ Похожее' and row['row_id'] in st.session_state.candidates_cache:
-                    has_manual_changes = True
+            st.info("💡 Вы можете редактировать города с совпадением < 86% - выберите из выпадающего списка")
+            
+            # Конфигурация колонок для data_editor
+            column_config = {
+                "Исходное название": st.column_config.TextColumn(
+                    "Исходное название",
+                    disabled=True,
+                    width="medium"
+                ),
+                "Название HH": st.column_config.SelectboxColumn(
+                    "Название HH (редактируемое)",
+                    help="Выберите правильный город из списка",
+                    width="large",
+                    options=[]  # Будет заполнено динамически
+                ),
+                "ID HH": st.column_config.TextColumn(
+                    "ID HH",
+                    disabled=True,
+                    width="small"
+                ),
+                "Регион": st.column_config.TextColumn(
+                    "Регион",
+                    disabled=True,
+                    width="medium"
+                ),
+                "Совпадение %": st.column_config.NumberColumn(
+                    "Совпадение %",
+                    disabled=True,
+                    width="small",
+                    format="%.1f"
+                ),
+                "Изменение": st.column_config.TextColumn(
+                    "Изменение",
+                    disabled=True,
+                    width="small"
+                ),
+                "Статус": st.column_config.TextColumn(
+                    "Статус",
+                    disabled=True,
+                    width="medium"
+                ),
+                "row_id": None,  # Скрыть
+                "sort_priority": None,  # Скрыть
+                "Можно редактировать": None  # Скрыть
+            }
+            
+            # Создаем словарь опций для каждой строки
+            # Для строк с совпадением < 86% добавляем кандидатов
+            for idx, row in editable_df.iterrows():
+                if row['Совпадение %'] < 86 and row['row_id'] in st.session_state.candidates_cache:
+                    candidates = st.session_state.candidates_cache[row['row_id']]
+                    if candidates:
+                        # Добавляем текущее значение и всех кандидатов
+                        options = list(set([row['Название HH']] + [c[0] for c in candidates if c[0]]))
+                        # Сохраняем опции для этой строки
+                        if 'row_options' not in st.session_state:
+                            st.session_state.row_options = {}
+                        st.session_state.row_options[idx] = options
+            
+            # Отображаем редактируемую таблицу
+            edited_data = st.data_editor(
+                editable_df,
+                column_config=column_config,
+                disabled=["Исходное название", "ID HH", "Регион", "Совпадение %", "Изменение", "Статус"],
+                hide_index=True,
+                use_container_width=True,
+                height=600,
+                key="city_editor"
+            )
+            
+            # Обрабатываем изменения
+            if edited_data is not None:
+                changes_made = False
+                
+                for idx, (orig_row, edit_row) in enumerate(zip(editable_df.iterrows(), edited_data.iterrows())):
+                    orig_data = orig_row[1]
+                    edit_data = edit_row[1]
                     
-                    col1, col2, col3 = st.columns([2, 3, 1])
-                    
-                    with col1:
-                        st.text(f"🔸 {row['Исходное название']}")
-                    
-                    with col2:
-                        candidates = st.session_state.candidates_cache[row['row_id']]
+                    # Проверяем, изменилось ли название HH
+                    if orig_data['Название HH'] != edit_data['Название HH'] and edit_data['Совпадение %'] < 86:
+                        new_city = edit_data['Название HH']
+                        row_id = orig_data['row_id']
                         
-                        if candidates:
-                            options = [f"{c[0]} ({c[1]:.1f}%)" for c in candidates]
-                            current_value = row['Название HH']
+                        # Сохраняем изменение
+                        st.session_state.manual_selections[row_id] = new_city
+                        changes_made = True
+                        
+                        # Обновляем данные в edited_data
+                        if new_city in hh_areas:
+                            edited_data.at[idx, 'ID HH'] = hh_areas[new_city]['id']
+                            edited_data.at[idx, 'Регион'] = hh_areas[new_city]['parent']
                             
-                            # Находим индекс текущего значения
-                            default_idx = 0
-                            for i, c in enumerate(candidates):
-                                if c[0] == current_value:
-                                    default_idx = i
-                                    break
-                            
-                            selected = st.selectbox(
-                                "Выберите город:",
-                                options=options,
-                                index=default_idx,
-                                key=f"select_{row['row_id']}",
-                                label_visibility="collapsed"
-                            )
-                            
-                            # Сохраняем выбор
-                            selected_city = selected.split(' (')[0]
-                            if selected_city != current_value:
-                                st.session_state.manual_selections[row['row_id']] = selected_city
-                            elif row['row_id'] in st.session_state.manual_selections:
-                                del st.session_state.manual_selections[row['row_id']]
-                    
-                    with col3:
-                        st.text(f"{row['Совпадение %']}%")
-                    
-                    st.markdown("---")
-            
-            # Показываем обычную таблицу для остальных
-            display_df = result_df_sorted[result_df_sorted['Статус'] != '⚠️ Похожее'].copy()
-            display_df = display_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
-            
-            if not display_df.empty:
-                st.dataframe(display_df, use_container_width=True, height=300)
+                            # Обновляем изменение
+                            original = edited_data.at[idx, 'Исходное название']
+                            edited_data.at[idx, 'Изменение'] = 'Да' if check_if_changed(original, new_city) else 'Нет'
+                
+                if changes_made:
+                    st.session_state.edited_df = edited_data
+                    st.success(f"✅ Внесено изменений: {len(st.session_state.manual_selections)}")
             
             st.markdown("---")
             st.subheader("💾 Скачать результаты")
             
             col1, col2, col3 = st.columns(3)
             
+            # Определяем финальный DataFrame
+            final_result_df = st.session_state.edited_df if st.session_state.edited_df is not None else result_df
+            
+            # Применяем ручные изменения если они есть
+            if st.session_state.manual_selections:
+                final_result_df = final_result_df.copy()
+                for row_id, new_city in st.session_state.manual_selections.items():
+                    mask = final_result_df['row_id'] == row_id
+                    final_result_df.loc[mask, 'Название HH'] = new_city
+                    
+                    if new_city in hh_areas:
+                        final_result_df.loc[mask, 'ID HH'] = hh_areas[new_city]['id']
+                        final_result_df.loc[mask, 'Регион'] = hh_areas[new_city]['parent']
+                    
+                    original = final_result_df.loc[mask, 'Исходное название'].values[0]
+                    final_result_df.loc[mask, 'Изменение'] = 'Да' if check_if_changed(original, new_city) else 'Нет'
+            
             # Полный отчет
             with col1:
                 output = io.BytesIO()
-                final_df = result_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
+                export_df = final_result_df.drop(['row_id', 'sort_priority', 'Можно редактировать'], axis=1, errors='ignore')
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    final_df.to_excel(writer, index=False, sheet_name='Результат')
+                    export_df.to_excel(writer, index=False, sheet_name='Результат')
                 output.seek(0)
                 
                 st.download_button(
@@ -576,7 +655,7 @@ if uploaded_file is not None and hh_areas is not None:
             
             # Файл для публикатора (обычный)
             with col2:
-                unique_df = result_df[~result_df['Статус'].str.contains('Дубликат', na=False)]
+                unique_df = final_result_df[~final_result_df['Статус'].str.contains('Дубликат', na=False)]
                 publisher_df = pd.DataFrame({'Название HH': unique_df['Название HH']})
                 publisher_df = publisher_df.dropna()
                 
@@ -599,24 +678,7 @@ if uploaded_file is not None and hh_areas is not None:
             # Файл с ручными изменениями
             with col3:
                 if st.session_state.manual_selections:
-                    # Применяем ручные изменения
-                    manual_df = result_df.copy()
-                    
-                    for row_id, new_city in st.session_state.manual_selections.items():
-                        mask = manual_df['row_id'] == row_id
-                        manual_df.loc[mask, 'Название HH'] = new_city
-                        
-                        # Обновляем ID и регион
-                        if new_city in hh_areas:
-                            manual_df.loc[mask, 'ID HH'] = hh_areas[new_city]['id']
-                            manual_df.loc[mask, 'Регион'] = hh_areas[new_city]['parent']
-                        
-                        # Обновляем изменение
-                        original = manual_df.loc[mask, 'Исходное название'].values[0]
-                        manual_df.loc[mask, 'Изменение'] = 'Да' if check_if_changed(original, new_city) else 'Нет'
-                    
-                    # Убираем дубликаты
-                    unique_manual_df = manual_df[~manual_df['Статус'].str.contains('Дубликат', na=False)]
+                    unique_manual_df = final_result_df[~final_result_df['Статус'].str.contains('Дубликат', na=False)]
                     publisher_manual_df = pd.DataFrame({'Название HH': unique_manual_df['Название HH']})
                     publisher_manual_df = publisher_manual_df.dropna()
                     
@@ -639,12 +701,14 @@ if uploaded_file is not None and hh_areas is not None:
                     )
                 else:
                     st.info("Нет ручных изменений")
-            
+    
     except Exception as e:
         st.error(f"❌ Ошибка обработки файла: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
 
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: gray;'>Сделано с ❤️ | Данные из API HH.ru</div>",
+    "Сделано с ❤️ | Данные из API HH.ru | v4.0 - Редактирование в таблице",
     unsafe_allow_html=True
 )
