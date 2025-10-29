@@ -56,6 +56,9 @@ if 'candidates_cache' not in st.session_state:
     st.session_state.candidates_cache = {}
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
+# Добавляем отдельный ключ для самого виджета, чтобы не было конфликтов
+if 'search_input_widget' not in st.session_state:
+    st.session_state.search_input_widget = ""
 
 # ============================================
 # ФУНКЦИИ
@@ -670,6 +673,7 @@ if uploaded_file is not None and hh_areas is not None:
                 st.session_state.processed = True
                 st.session_state.manual_selections = {}
                 st.session_state.search_query = ""
+                st.session_state.search_input_widget = "" # Сбрасываем и виджет
         
         if st.session_state.processed and st.session_state.result_df is not None:
             result_df = st.session_state.result_df.copy()
@@ -714,11 +718,15 @@ if uploaded_file is not None and hh_areas is not None:
             # ==========================================================
             # ИЗМЕНЕННЫЙ БЛОК ПОИСКА
             # ==========================================================
-            # Убрана кнопка "Очистить". Поиск работает мгновенно при вводе
-            # благодаря механизму Streamlit, который сохраняет значение в session_state.
+            # Используем callback on_change для надежного обновления состояния.
+            # Это решает проблему, когда очистка поля не обновляла таблицу.
+            def on_search_change():
+                st.session_state.search_query = st.session_state.search_input_widget
+            
             st.text_input(
                 "🔍 Поиск по таблице",
-                key="search_query", # Значение будет автоматически сохраняться здесь
+                key="search_input_widget",
+                on_change=on_search_change,
                 placeholder="Начните вводить название города...",
                 label_visibility="visible"
             )
