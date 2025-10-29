@@ -712,34 +712,28 @@ if uploaded_file is not None and hh_areas is not None:
             st.markdown("---")
             st.subheader("📋 Таблица сопоставлений")
             
-            # ==========================================================
-            # ИСПРАВЛЕННЫЙ БЛОК ПОИСКА
-            # ==========================================================
-            # Упрощенная и более надежная версия.
-            # Поле ввода напрямую привязано к 'search_query' в состоянии сессии.
-            # Streamlit автоматически обновит st.session_state.search_query при любом изменении.
-            st.text_input(
+            # ПОЛЕ ПОИСКА, привязанное к session_state
+            search_query = st.text_input(
                 "🔍 Поиск по таблице",
-                key="search_query", # Прямая привязка к состоянию
-                placeholder="Начните вводить название города...",
-                label_visibility="visible"
+                placeholder="Начните вводить для фильтрации...",
+                key="search_query"  # Привязываем к ключу в session_state
             )
-            # ==========================================================
-            
-            # Сортировка
+
+            # Сортировка данных (делаем это один раз)
             result_df['sort_priority'] = result_df.apply(
                 lambda row: 0 if row['Совпадение %'] == 0 else (1 if row['Изменение'] == 'Да' else 2),
                 axis=1
             )
-            
             result_df_sorted = result_df.sort_values(
                 by=['sort_priority', 'Совпадение %'],
                 ascending=[True, True]
             ).reset_index(drop=True)
-            
-            # Фильтрация по поисковому запросу
-            if st.session_state.search_query and st.session_state.search_query.strip():
-                search_lower = st.session_state.search_query.lower().strip()
+
+            # Фильтрация по поисковому запросу из session_state
+            if st.session_state.search_query:
+                search_lower = st.session_state.search_query.lower()
+                
+                # Фильтруем DataFrame
                 mask = result_df_sorted.apply(
                     lambda row: (
                         search_lower in str(row['Исходное название']).lower() or
@@ -750,18 +744,21 @@ if uploaded_file is not None and hh_areas is not None:
                     axis=1
                 )
                 result_df_filtered = result_df_sorted[mask]
-                
+
+                # Выводим сообщение о результатах поиска
                 if len(result_df_filtered) == 0:
                     st.warning(f"По запросу **'{st.session_state.search_query}'** ничего не найдено")
                 else:
-                    st.info(f"Найдено совпадений: **{len(result_df_filtered)}** из {len(result_df_sorted)}")
-            else:
-                result_df_filtered = result_df_sorted
+                    st.info(f"✅ Найдено совпадений: **{len(result_df_filtered)}** из {len(result_df_sorted)}")
             
-            # Показываем таблицу
+            else:
+                # Если поле поиска пустое, показываем всю таблицу
+                result_df_filtered = result_df_sorted
+
+            # Показываем отфильтрованную или полную таблицу
             display_df = result_df_filtered.copy()
             display_df = display_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
-            
+
             st.dataframe(display_df, use_container_width=True, height=400)
             
             # Раздел для редактирования городов с совпадением <= 90%
@@ -969,3 +966,4 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",
     unsafe_allow_html=True
 )
+
