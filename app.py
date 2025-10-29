@@ -653,9 +653,9 @@ if uploaded_file is not None and hh_areas is not None:
     
     try:
         if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
+            df = pd.read_csv(uploaded_file, header=None)
         else:
-            df = pd.read_excel(uploaded_file)
+            df = pd.read_excel(uploaded_file, header=None)
         
         client_cities = df.iloc[:, 0].tolist()
         st.info(f"📄 Загружено **{len(client_cities)}** городов из файла")
@@ -711,26 +711,18 @@ if uploaded_file is not None and hh_areas is not None:
             st.markdown("---")
             st.subheader("📋 Таблица сопоставлений")
             
-            # ПОЛЕ ПОИСКА
-            search_col1, search_col2 = st.columns([3, 1])
-            with search_col1:
-                # Используем on_change для мгновенного обновления
-                def update_search():
-                    st.session_state.search_query = st.session_state.search_input_widget
-                
-                search_query = st.text_input(
-                    "🔍 Поиск по таблице",
-                    value=st.session_state.search_query,
-                    placeholder="Начните вводить название города...",
-                    key="search_input_widget",
-                    on_change=update_search,
-                    label_visibility="visible"
-                )
-            
-            with search_col2:
-                if st.button("🗑️ Очистить", use_container_width=True):
-                    st.session_state.search_query = ""
-                    st.rerun()
+            # ==========================================================
+            # ИЗМЕНЕННЫЙ БЛОК ПОИСКА
+            # ==========================================================
+            # Убрана кнопка "Очистить". Поиск работает мгновенно при вводе
+            # благодаря механизму Streamlit, который сохраняет значение в session_state.
+            st.text_input(
+                "🔍 Поиск по таблице",
+                key="search_query", # Значение будет автоматически сохраняться здесь
+                placeholder="Начните вводить название города...",
+                label_visibility="visible"
+            )
+            # ==========================================================
             
             # Сортировка
             result_df['sort_priority'] = result_df.apply(
@@ -853,7 +845,7 @@ if uploaded_file is not None and hh_areas is not None:
                         with col4:
                             st.text(row['Статус'])
                         
-                        st.markdown("---")
+                        st.markdown("<hr style='margin-top: 5px; margin-bottom: 5px;'>", unsafe_allow_html=True)
                 
                 if st.session_state.manual_selections:
                     # Подсчитываем сколько городов отмечено как "Нет совпадения"
@@ -918,7 +910,12 @@ if uploaded_file is not None and hh_areas is not None:
                         key='download_manual'
                     )
                 else:
-                    st.info("Нет ручных изменений")
+                    st.button(
+                        "✏️ С ручными изменениями", 
+                        use_container_width=True, 
+                        disabled=True, 
+                        help="Внесите изменения в разделе 'Редактирование', чтобы скачать этот файл"
+                    )
             
             # Полный отчет
             with col2:
