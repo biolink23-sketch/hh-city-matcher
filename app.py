@@ -711,14 +711,16 @@ if uploaded_file is not None and hh_areas is not None:
 st.markdown("---")
             st.subheader("📋 Таблица сопоставлений")
             
-            # ПОЛЕ ПОИСКА - используем session_state напрямую
-            search_query = st.text_input(
-                "🔍 Поиск по таблице",
-                value="",
-                placeholder="Начните вводить название города...",
-                key=f"search_input_{id(result_df)}",  # Уникальный ключ
-                label_visibility="visible"
-            )
+            # ПОЛЕ ПОИСКА
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                search_query = st.text_input(
+                    "🔍 Поиск",
+                    placeholder="Введите название города...",
+                    label_visibility="collapsed"
+                )
+            with col2:
+                st.write("")  # Пустое место для выравнивания
             
             # Сортировка
             result_df['sort_priority'] = result_df.apply(
@@ -731,32 +733,35 @@ st.markdown("---")
                 ascending=[True, True]
             ).reset_index(drop=True)
             
-            # Фильтрация по поисковому запросу - работает сразу
-            if search_query and search_query.strip():
-                search_lower = search_query.lower().strip()
+            # Фильтрация
+            if search_query:
+                search_lower = search_query.lower()
                 mask = result_df_sorted.apply(
-                    lambda row: (
-                        search_lower in str(row['Исходное название']).lower() or
-                        search_lower in str(row['Итоговое гео']).lower() or
-                        search_lower in str(row['Регион']).lower() or
-                        search_lower in str(row['Статус']).lower()
+                    lambda row: any(
+                        search_lower in str(val).lower() 
+                        for val in [row['Исходное название'], row['Итоговое гео'], 
+                                   row['Регион'], row['Статус']]
                     ),
                     axis=1
                 )
                 result_df_filtered = result_df_sorted[mask]
                 
-                if len(result_df_filtered) == 0:
-                    st.warning(f"По запросу **'{search_query}'** ничего не найдено")
+                if len(result_df_filtered) > 0:
+                    st.caption(f"Найдено: {len(result_df_filtered)} из {len(result_df_sorted)}")
                 else:
-                    st.info(f"✅ Найдено совпадений: **{len(result_df_filtered)}** из {len(result_df_sorted)}")
+                    st.warning(f"Ничего не найдено по запросу '{search_query}'")
             else:
                 result_df_filtered = result_df_sorted
             
             # Показываем таблицу
-            display_df = result_df_filtered.copy()
-            display_df = display_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
+            display_df = result_df_filtered.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
             
-            st.dataframe(display_df, use_container_width=True, height=400)
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                height=400,
+                hide_index=True
+            )
             # Раздел для редактирования городов с совпадением <= 90%
             editable_rows = result_df_sorted[result_df_sorted['Совпадение %'] <= 90].copy()
             
@@ -957,4 +962,5 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",
     unsafe_allow_html=True
 )
+
 
