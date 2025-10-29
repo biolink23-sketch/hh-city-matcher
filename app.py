@@ -708,19 +708,29 @@ if uploaded_file is not None and hh_areas is not None:
                 - 🔄 По результату HH: **{dup_hh}**
                 """)
             
-st.markdown("---")
+            st.markdown("---")
             st.subheader("📋 Таблица сопоставлений")
             
             # ПОЛЕ ПОИСКА
-            col1, col2 = st.columns([4, 1])
-            with col1:
+            search_col1, search_col2 = st.columns([3, 1])
+            with search_col1:
+                # Используем on_change для мгновенного обновления
+                def update_search():
+                    st.session_state.search_query = st.session_state.search_input_widget
+                
                 search_query = st.text_input(
-                    "🔍 Поиск",
-                    placeholder="Введите название города...",
-                    label_visibility="collapsed"
+                    "🔍 Поиск по таблице",
+                    value=st.session_state.search_query,
+                    placeholder="Начните вводить название города...",
+                    key="search_input_widget",
+                    on_change=update_search,
+                    label_visibility="visible"
                 )
-            with col2:
-                st.write("")  # Пустое место для выравнивания
+            
+            with search_col2:
+                if st.button("🗑️ Очистить", use_container_width=True):
+                    st.session_state.search_query = ""
+                    st.rerun()
             
             # Сортировка
             result_df['sort_priority'] = result_df.apply(
@@ -733,35 +743,33 @@ st.markdown("---")
                 ascending=[True, True]
             ).reset_index(drop=True)
             
-            # Фильтрация
-            if search_query:
-                search_lower = search_query.lower()
+            # Фильтрация по поисковому запросу
+            if st.session_state.search_query and st.session_state.search_query.strip():
+                search_lower = st.session_state.search_query.lower().strip()
                 mask = result_df_sorted.apply(
-                    lambda row: any(
-                        search_lower in str(val).lower() 
-                        for val in [row['Исходное название'], row['Итоговое гео'], 
-                                   row['Регион'], row['Статус']]
+                    lambda row: (
+                        search_lower in str(row['Исходное название']).lower() or
+                        search_lower in str(row['Итоговое гео']).lower() or
+                        search_lower in str(row['Регион']).lower() or
+                        search_lower in str(row['Статус']).lower()
                     ),
                     axis=1
                 )
                 result_df_filtered = result_df_sorted[mask]
                 
-                if len(result_df_filtered) > 0:
-                    st.caption(f"Найдено: {len(result_df_filtered)} из {len(result_df_sorted)}")
+                if len(result_df_filtered) == 0:
+                    st.warning(f"По запросу **'{st.session_state.search_query}'** ничего не найдено")
                 else:
-                    st.warning(f"Ничего не найдено по запросу '{search_query}'")
+                    st.info(f"Найдено совпадений: **{len(result_df_filtered)}** из {len(result_df_sorted)}")
             else:
                 result_df_filtered = result_df_sorted
             
             # Показываем таблицу
-            display_df = result_df_filtered.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
+            display_df = result_df_filtered.copy()
+            display_df = display_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
             
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                height=400,
-                hide_index=True
-            )
+            st.dataframe(display_df, use_container_width=True, height=400)
+            
             # Раздел для редактирования городов с совпадением <= 90%
             editable_rows = result_df_sorted[result_df_sorted['Совпадение %'] <= 90].copy()
             
@@ -962,5 +970,3 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",
     unsafe_allow_html=True
 )
-
-
