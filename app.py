@@ -757,7 +757,6 @@ st.markdown("---")
             display_df = display_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
             
             st.dataframe(display_df, use_container_width=True, height=400)
-            
             # Раздел для редактирования городов с совпадением <= 90%
             editable_rows = result_df_sorted[result_df_sorted['Совпадение %'] <= 90].copy()
             
