@@ -149,12 +149,16 @@ def smart_match_city(client_city, hh_city_names, hh_areas, threshold=85):
     # Получаем кандидатов по совпадению слова
     word_candidates = get_candidates_by_word(client_city, hh_city_names)
     
-    # Если есть кандидаты по слову, используем первый как основной результат
-    if word_candidates and len(word_candidates) > 0:
+    # Если есть кандидаты по слову с хорошим совпадением (>= 85%), используем первый
+    if word_candidates and len(word_candidates) > 0 and word_candidates[0][1] >= threshold:
         best_candidate = word_candidates[0]
         return (best_candidate[0], best_candidate[1], 0), word_candidates
     
-    # Если нет кандидатов по слову, используем старую логику
+    # Если нет хороших кандидатов по слову, возвращаем None (не найдено)
+    if not word_candidates or (word_candidates and word_candidates[0][1] < threshold):
+        return None, word_candidates
+    
+    # Старая логика для точных совпадений
     exact_matches = []
     exact_matches_with_region = []
     
@@ -406,6 +410,7 @@ with st.sidebar:
         - Анализирует каждый город из вашего файла
         - Ищет совпадения по **первому слову** в названии города
         - Учитывает название города, область/регион, похожесть написания
+        - **Порог совпадения 85%** - если ниже, город помечается как "Не найдено"
         
         **Пример:** для города "Кировск" найдет все города, содержащие "кировск":
         - Кировск (Ленинградская область)
@@ -527,8 +532,8 @@ with st.sidebar:
         файл без заголовков.
         
         **Q: Почему в таблице один город, а в редактировании другой?**  
-        A: Сервис показывает лучший вариант по первому слову. Вы можете выбрать 
-        любой другой вариант из списка кандидатов.
+        A: Если процент совпадения < 85%, город помечается как "Не найдено". 
+        Вы можете выбрать подходящий вариант из списка кандидатов.
         
         ---
         
@@ -606,7 +611,7 @@ if uploaded_file is not None and hh_areas is not None:
             st.markdown("---")
             st.subheader("📊 Результаты")
             
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
             
             total = len(result_df)
             exact = len(result_df[result_df['Статус'] == '✅ Точное'])
@@ -614,11 +619,18 @@ if uploaded_file is not None and hh_areas is not None:
             duplicates = len(result_df[result_df['Статус'].str.contains('Дубликат', na=False)])
             not_found = len(result_df[result_df['Статус'] == '❌ Не найдено'])
             
+            # Подсчет городов к выгрузке (все кроме не найденных и дубликатов)
+            to_export = len(result_df[
+                (~result_df['Статус'].str.contains('Дубликат', na=False)) & 
+                (result_df['Итоговое гео'].notna())
+            ])
+            
             col1.metric("Всего", total)
             col2.metric("✅ Точных", exact)
             col3.metric("⚠️ Похожих", similar)
             col4.metric("🔄 Дубликатов", duplicates)
             col5.metric("❌ Не найдено", not_found)
+            col6.metric("📤 К выгрузке", to_export)
             
             if duplicates > 0:
                 st.warning(f"""
@@ -782,10 +794,11 @@ if uploaded_file is not None and hh_areas is not None:
                     output_manual.seek(0)
                     
                     manual_count = len(publisher_manual_df)
-                    changes_count = len(st.session_state.manual_selections)
+                    total_cities = len(result_df)
+                    percentage = (manual_count / total_cities * 100) if total_cities > 0 else 0
                     
                     st.download_button(
-                        label=f"✏️ С ручными изменениями ({changes_count} изм.)",
+                        label=f"✏️ С ручными изменениями\n{manual_count} ({percentage:.0f}%) из {total_cities}",
                         data=output_manual,
                         file_name=f"geo_manual_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
