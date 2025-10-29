@@ -6,7 +6,7 @@ import io
 
 # Настройка страницы
 st.set_page_config(
-    page_title="Сопоставление городов с HH.ru",
+    page_title="Синхронизатор гео HH.ru",
     page_icon="🌍",
     layout="wide"
 )
@@ -272,7 +272,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
         if pd.isna(client_city) or str(client_city).strip() == "":
             results.append({
                 'Исходное название': client_city,
-                'Название HH': None,
+                'Итоговое гео': None,
                 'ID HH': None,
                 'Регион': None,
                 'Совпадение %': 0,
@@ -290,7 +290,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
             original_result = seen_original_cities[client_city_normalized]
             results.append({
                 'Исходное название': client_city_original,
-                'Название HH': original_result['Название HH'],
+                'Итоговое гео': original_result['Итоговое гео'],
                 'ID HH': original_result['ID HH'],
                 'Регион': original_result['Регион'],
                 'Совпадение %': original_result['Совпадение %'],
@@ -317,7 +317,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 duplicate_hh_count += 1
                 city_result = {
                     'Исходное название': client_city_original,
-                    'Название HH': hh_info['name'],
+                    'Итоговое гео': hh_info['name'],
                     'ID HH': hh_info['id'],
                     'Регион': hh_info['parent'],
                     'Совпадение %': round(score, 1),
@@ -332,7 +332,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
                 
                 city_result = {
                     'Исходное название': client_city_original,
-                    'Название HH': hh_info['name'],
+                    'Итоговое гео': hh_info['name'],
                     'ID HH': hh_info['id'],
                     'Регион': hh_info['parent'],
                     'Совпадение %': round(score, 1),
@@ -347,7 +347,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
         else:
             city_result = {
                 'Исходное название': client_city_original,
-                'Название HH': None,
+                'Итоговое гео': None,
                 'ID HH': None,
                 'Регион': None,
                 'Совпадение %': 0,
@@ -369,7 +369,7 @@ def match_cities(client_cities, hh_areas, threshold=85):
 # ============================================
 # ИНТЕРФЕЙС
 # ============================================
-st.title("🌍 Сопоставление городов с HH.ru")
+st.title("🌍 Синхронизатор гео HH.ru")
 st.markdown("---")
 
 with st.sidebar:
@@ -388,7 +388,7 @@ with st.sidebar:
     1. Загрузите Excel или CSV
     2. Города в первой колонке
     3. Нажмите "Начать"
-    4. Редактируйте города с совпадением < 86%
+    4. Редактируйте города с совпадением ≤ 90%
     5. Выберите "❌ Нет совпадения" если город не подходит
     6. Скачайте результат
     """)
@@ -404,12 +404,13 @@ with st.sidebar:
     
     st.markdown("---")
     st.success("""
-    ✨ **Новое v4.1:**
+    ✨ **Возможности:**
     
-    **Улучшенное редактирование:**
+    **Умная синхронизация:**
+    - Автоматический подбор городов из справочника HH
+    - Редактирование городов с совпадением ≤ 90%
     - Опция "❌ Нет совпадения" - город не попадет в выгрузку
-    - Поиск по начальному слову (все города с этим словом)
-    - Сортировка кандидатов по релевантности
+    - Поиск по начальному слову
     """)
 
 col1, col2 = st.columns([1, 1])
@@ -424,9 +425,9 @@ with col1:
     
     with st.expander("📋 Показать пример формата файла"):
         example_df = pd.DataFrame({
-            'Город': ['Москва', 'Питер', 'Екатеринбург', 'Новосиб']
+            '': ['Москва', 'Санкт-Петербург', 'Екатеринбург', 'Новосибирск']
         })
-        st.dataframe(example_df, use_container_width=True)
+        st.dataframe(example_df, use_container_width=True, hide_index=True)
 
 with col2:
     st.subheader("ℹ️ Информация")
@@ -468,7 +469,7 @@ if uploaded_file is not None and hh_areas is not None:
             st.markdown("---")
             st.subheader("📊 Результаты")
             
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            col1, col2, col3, col4, col5 = st.columns(5)
             
             total = len(result_df)
             exact = len(result_df[result_df['Статус'] == '✅ Точное'])
@@ -478,11 +479,10 @@ if uploaded_file is not None and hh_areas is not None:
             changed = len(result_df[result_df['Изменение'] == 'Да'])
             
             col1.metric("Всего", total)
-            col2.metric("✅ Точных", exact, f"{exact/total*100:.1f}%")
-            col3.metric("⚠️ Похожих", similar, f"{similar/total*100:.1f}%")
-            col4.metric("🔄 Дубликатов", duplicates, f"{duplicates/total*100:.1f}%")
-            col5.metric("❌ Не найдено", not_found, f"{not_found/total*100:.1f}%")
-            col6.metric("🔄 Изменено", changed, f"{changed/total*100:.1f}%")
+            col2.metric("✅ Точных", exact)
+            col3.metric("⚠️ Похожих", similar)
+            col4.metric("🔄 Дубликатов", duplicates)
+            col5.metric("❌ Не найдено", not_found)
             
             if duplicates > 0:
                 st.warning(f"""
@@ -511,12 +511,12 @@ if uploaded_file is not None and hh_areas is not None:
             
             st.dataframe(display_df, use_container_width=True, height=400)
             
-            # Раздел для редактирования городов с совпадением < 86%
-            editable_rows = result_df_sorted[result_df_sorted['Совпадение %'] < 86].copy()
+            # Раздел для редактирования городов с совпадением <= 90%
+            editable_rows = result_df_sorted[result_df_sorted['Совпадение %'] <= 90].copy()
             
             if len(editable_rows) > 0:
                 st.markdown("---")
-                st.subheader("✏️ Редактирование городов с совпадением < 86%")
+                st.subheader("✏️ Редактирование городов с совпадением ≤ 90%")
                 st.info(f"Найдено **{len(editable_rows)}** городов, доступных для редактирования")
                 
                 # Создаем форму для редактирования
@@ -537,7 +537,7 @@ if uploaded_file is not None and hh_areas is not None:
                                 options = ["❌ Нет совпадения"] + [f"{c[0]} ({c[1]:.1f}%)" for c in candidates]
                                 
                                 # Текущее значение
-                                current_value = row['Название HH']
+                                current_value = row['Итоговое гео']
                                 
                                 # Если есть ручной выбор, используем его
                                 if row_id in st.session_state.manual_selections:
@@ -616,7 +616,7 @@ if uploaded_file is not None and hh_areas is not None:
                     
                     if new_value == "❌ Нет совпадения":
                         # Помечаем как не найденное
-                        final_result_df.loc[mask, 'Название HH'] = None
+                        final_result_df.loc[mask, 'Итоговое гео'] = None
                         final_result_df.loc[mask, 'ID HH'] = None
                         final_result_df.loc[mask, 'Регион'] = None
                         final_result_df.loc[mask, 'Совпадение %'] = 0
@@ -624,7 +624,7 @@ if uploaded_file is not None and hh_areas is not None:
                         final_result_df.loc[mask, 'Статус'] = '❌ Не найдено'
                     else:
                         # Применяем выбранный город
-                        final_result_df.loc[mask, 'Название HH'] = new_value
+                        final_result_df.loc[mask, 'Итоговое гео'] = new_value
                         
                         if new_value in hh_areas:
                             final_result_df.loc[mask, 'ID HH'] = hh_areas[new_value]['id']
@@ -633,51 +633,11 @@ if uploaded_file is not None and hh_areas is not None:
                         original = final_result_df.loc[mask, 'Исходное название'].values[0]
                         final_result_df.loc[mask, 'Изменение'] = 'Да' if check_if_changed(original, new_value) else 'Нет'
             
-            # Полный отчет
+            # Файл с ручными изменениями (первая кнопка)
             with col1:
-                output = io.BytesIO()
-                export_df = final_result_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    export_df.to_excel(writer, index=False, sheet_name='Результат')
-                output.seek(0)
-                
-                st.download_button(
-                    label="📥 Скачать полный отчет",
-                    data=output,
-                    file_name=f"result_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key='download_full'
-                )
-            
-            # Файл для публикатора (обычный)
-            with col2:
-                unique_df = final_result_df[~final_result_df['Статус'].str.contains('Дубликат', na=False)]
-                # Убираем города с "Нет совпадения"
-                publisher_df = pd.DataFrame({'Название HH': unique_df['Название HH']})
-                publisher_df = publisher_df.dropna()
-                
-                output_publisher = io.BytesIO()
-                with pd.ExcelWriter(output_publisher, engine='openpyxl') as writer:
-                    publisher_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
-                output_publisher.seek(0)
-                
-                unique_count = len(publisher_df)
-                
-                st.download_button(
-                    label=f"📤 Файл для публикатора ({unique_count})",
-                    data=output_publisher,
-                    file_name=f"geo_for_publisher_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key='download_publisher'
-                )
-            
-            # Файл с ручными изменениями
-            with col3:
                 if st.session_state.manual_selections:
                     unique_manual_df = final_result_df[~final_result_df['Статус'].str.contains('Дубликат', na=False)]
-                    publisher_manual_df = pd.DataFrame({'Название HH': unique_manual_df['Название HH']})
+                    publisher_manual_df = pd.DataFrame({'Итоговое гео': unique_manual_df['Итоговое гео']})
                     publisher_manual_df = publisher_manual_df.dropna()
                     
                     output_manual = io.BytesIO()
@@ -699,6 +659,46 @@ if uploaded_file is not None and hh_areas is not None:
                     )
                 else:
                     st.info("Нет ручных изменений")
+            
+            # Полный отчет
+            with col2:
+                output = io.BytesIO()
+                export_df = final_result_df.drop(['row_id', 'sort_priority'], axis=1, errors='ignore')
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    export_df.to_excel(writer, index=False, sheet_name='Результат')
+                output.seek(0)
+                
+                st.download_button(
+                    label="📥 Скачать полный отчет",
+                    data=output,
+                    file_name=f"result_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key='download_full'
+                )
+            
+            # Файл для публикатора (обычный)
+            with col3:
+                unique_df = final_result_df[~final_result_df['Статус'].str.contains('Дубликат', na=False)]
+                # Убираем города с "Нет совпадения"
+                publisher_df = pd.DataFrame({'Итоговое гео': unique_df['Итоговое гео']})
+                publisher_df = publisher_df.dropna()
+                
+                output_publisher = io.BytesIO()
+                with pd.ExcelWriter(output_publisher, engine='openpyxl') as writer:
+                    publisher_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
+                output_publisher.seek(0)
+                
+                unique_count = len(publisher_df)
+                
+                st.download_button(
+                    label=f"📤 Файл для публикатора ({unique_count})",
+                    data=output_publisher,
+                    file_name=f"geo_for_publisher_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key='download_publisher'
+                )
     
     except Exception as e:
         st.error(f"❌ Ошибка обработки файла: {str(e)}")
@@ -707,6 +707,6 @@ if uploaded_file is not None and hh_areas is not None:
 
 st.markdown("---")
 st.markdown(
-    "Сделано с ❤️ | Данные из API HH.ru | v4.1",
+    "Сделано с ❤️ | Данные из API HH.ru",
     unsafe_allow_html=True
 )
