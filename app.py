@@ -11,6 +11,22 @@ st.set_page_config(
     layout="wide"
 )
 
+# CSS для анимации земли
+st.markdown("""
+<style>
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.rotating-earth {
+    display: inline-block;
+    animation: rotate 3s linear infinite;
+    font-size: 1.5em;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # Инициализация session_state
 if 'result_df' not in st.session_state:
     st.session_state.result_df = None
@@ -22,8 +38,6 @@ if 'manual_selections' not in st.session_state:
     st.session_state.manual_selections = {}
 if 'candidates_cache' not in st.session_state:
     st.session_state.candidates_cache = {}
-if 'search_query' not in st.session_state:
-    st.session_state.search_query = ""
 
 # ============================================
 # ФУНКЦИИ
@@ -381,7 +395,8 @@ def match_cities(client_cities, hh_areas, threshold=85):
 # ============================================
 # ИНТЕРФЕЙС
 # ============================================
-st.title("🌍 Синхронизатор гео HH.ru")
+# Заголовок с анимированной землей
+st.markdown('<span class="rotating-earth">🌍</span> Синхронизатор гео HH.ru', unsafe_allow_html=True)
 st.markdown("---")
 
 with st.sidebar:
@@ -569,8 +584,8 @@ with st.sidebar:
         Вы можете выбрать подходящий вариант из списка кандидатов.
         
         **Q: Как работает поиск в таблице?**  
-        A: Введите любую часть названия города в поле поиска. Таблица автоматически 
-        отфильтрует результаты и покажет только совпадения.
+        A: Начните вводить название города - таблица автоматически отфильтруется. 
+        Поиск работает по всем колонкам (название, регион, статус).
         
         ---
         
@@ -581,7 +596,7 @@ with st.sidebar:
         - **Порог совпадения**: По умолчанию 85% (настраивается)
         - **Формат выгрузки**: Excel (.xlsx), одна колонка без заголовка
         - **Обновление**: Справочник обновляется каждый час
-        - **Поиск**: Работает по всем колонкам таблицы в реальном времени
+        - **Поиск**: Работает в реальном времени по мере ввода
         """)
 
 col1, col2 = st.columns([1, 1])
@@ -630,7 +645,6 @@ if uploaded_file is not None and hh_areas is not None:
                 st.session_state.total_dup = total_dup
                 st.session_state.processed = True
                 st.session_state.manual_selections = {}
-                st.session_state.search_query = ""
         
         if st.session_state.processed and st.session_state.result_df is not None:
             result_df = st.session_state.result_df.copy()
@@ -677,15 +691,14 @@ if uploaded_file is not None and hh_areas is not None:
             with search_col1:
                 search_query = st.text_input(
                     "🔍 Поиск по таблице",
-                    value=st.session_state.search_query,
-                    placeholder="Введите название города для поиска...",
-                    key="search_input"
+                    placeholder="Начните вводить название города...",
+                    key="search_input",
+                    label_visibility="visible"
                 )
-                st.session_state.search_query = search_query
             
             with search_col2:
-                if st.button("🗑️ Очистить поиск", use_container_width=True):
-                    st.session_state.search_query = ""
+                if st.button("🗑️ Очистить", use_container_width=True, key="clear_search"):
+                    search_query = ""
                     st.rerun()
             
             # Сортировка
@@ -700,8 +713,8 @@ if uploaded_file is not None and hh_areas is not None:
             ).reset_index(drop=True)
             
             # Фильтрация по поисковому запросу
-            if search_query:
-                search_lower = search_query.lower()
+            if search_query and search_query.strip():
+                search_lower = search_query.lower().strip()
                 mask = result_df_sorted.apply(
                     lambda row: (
                         search_lower in str(row['Исходное название']).lower() or
