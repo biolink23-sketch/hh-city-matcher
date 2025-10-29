@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# CSS для анимации земли
+# CSS для анимации земли и стилей
 st.markdown("""
 <style>
 @keyframes rotate {
@@ -22,7 +22,23 @@ st.markdown("""
 .rotating-earth {
     display: inline-block;
     animation: rotate 3s linear infinite;
-    font-size: 1.5em;
+    font-size: 3em;
+    vertical-align: middle;
+    margin-right: 15px;
+}
+
+.main-title {
+    display: inline-block;
+    font-size: 3em;
+    font-weight: bold;
+    vertical-align: middle;
+    margin: 0;
+}
+
+.title-container {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -38,6 +54,8 @@ if 'manual_selections' not in st.session_state:
     st.session_state.manual_selections = {}
 if 'candidates_cache' not in st.session_state:
     st.session_state.candidates_cache = {}
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
 
 # ============================================
 # ФУНКЦИИ
@@ -396,7 +414,13 @@ def match_cities(client_cities, hh_areas, threshold=85):
 # ИНТЕРФЕЙС
 # ============================================
 # Заголовок с анимированной землей
-st.markdown('<span class="rotating-earth">🌍</span> Синхронизатор гео HH.ru', unsafe_allow_html=True)
+st.markdown(
+    '<div class="title-container">'
+    '<span class="rotating-earth">🌍</span>'
+    '<span class="main-title">Синхронизатор гео HH.ru</span>'
+    '</div>',
+    unsafe_allow_html=True
+)
 st.markdown("---")
 
 with st.sidebar:
@@ -645,6 +669,7 @@ if uploaded_file is not None and hh_areas is not None:
                 st.session_state.total_dup = total_dup
                 st.session_state.processed = True
                 st.session_state.manual_selections = {}
+                st.session_state.search_query = ""
         
         if st.session_state.processed and st.session_state.result_df is not None:
             result_df = st.session_state.result_df.copy()
@@ -689,16 +714,22 @@ if uploaded_file is not None and hh_areas is not None:
             # ПОЛЕ ПОИСКА
             search_col1, search_col2 = st.columns([3, 1])
             with search_col1:
+                # Используем on_change для мгновенного обновления
+                def update_search():
+                    st.session_state.search_query = st.session_state.search_input_widget
+                
                 search_query = st.text_input(
                     "🔍 Поиск по таблице",
+                    value=st.session_state.search_query,
                     placeholder="Начните вводить название города...",
-                    key="search_input",
+                    key="search_input_widget",
+                    on_change=update_search,
                     label_visibility="visible"
                 )
             
             with search_col2:
-                if st.button("🗑️ Очистить", use_container_width=True, key="clear_search"):
-                    search_query = ""
+                if st.button("🗑️ Очистить", use_container_width=True):
+                    st.session_state.search_query = ""
                     st.rerun()
             
             # Сортировка
@@ -713,8 +744,8 @@ if uploaded_file is not None and hh_areas is not None:
             ).reset_index(drop=True)
             
             # Фильтрация по поисковому запросу
-            if search_query and search_query.strip():
-                search_lower = search_query.lower().strip()
+            if st.session_state.search_query and st.session_state.search_query.strip():
+                search_lower = st.session_state.search_query.lower().strip()
                 mask = result_df_sorted.apply(
                     lambda row: (
                         search_lower in str(row['Исходное название']).lower() or
@@ -727,7 +758,7 @@ if uploaded_file is not None and hh_areas is not None:
                 result_df_filtered = result_df_sorted[mask]
                 
                 if len(result_df_filtered) == 0:
-                    st.warning(f"По запросу **'{search_query}'** ничего не найдено")
+                    st.warning(f"По запросу **'{st.session_state.search_query}'** ничего не найдено")
                 else:
                     st.info(f"Найдено совпадений: **{len(result_df_filtered)}** из {len(result_df_sorted)}")
             else:
