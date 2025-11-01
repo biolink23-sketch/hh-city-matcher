@@ -144,8 +144,15 @@ def get_cities_by_regions(hh_areas, selected_regions):
     """Получает все города из выбранных регионов"""
     cities = []
     
+    # Список исключений - что не выгружать
+    excluded_names = ['Россия', 'Другие регионы', 'Другие страны']
+    
     for city_name, city_info in hh_areas.items():
         parent = city_info['parent']
+        
+        # Пропускаем исключенные названия
+        if city_name in excluded_names or parent in excluded_names:
+            continue
         
         # Проверяем, входит ли город в выбранные регионы
         for region in selected_regions:
@@ -165,7 +172,6 @@ def get_cities_by_regions(hh_areas, selected_regions):
                 break
     
     return pd.DataFrame(cities)
-
 def normalize_region_name(text):  
     """Нормализует название региона для сравнения"""  
     text = text.lower()  
@@ -977,3 +983,4 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
+
