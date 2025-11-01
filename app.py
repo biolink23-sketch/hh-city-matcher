@@ -146,11 +146,14 @@ def get_hh_areas():
     return areas_dict  
  
 def get_cities_by_regions(hh_areas, selected_regions):
-    """Получает все города из выбранных регионов (только Россия)"""
+    """Получает все города из выбранных регионов (только Россия, только города)"""
     cities = []
     
     # Список исключений - что не выгружать
     excluded_names = ['Россия', 'Другие регионы', 'Другие страны']
+    
+    # Ключевые слова, которые указывают на регион, а не город
+    region_keywords = ['область', 'край', 'республика', 'округ', 'АО', 'автономный']
     
     # ID России
     russia_id = '113'
@@ -166,6 +169,14 @@ def get_cities_by_regions(hh_areas, selected_regions):
         # Пропускаем исключенные названия
         if city_name in excluded_names:
             continue
+        
+        # Пропускаем области, края, республики (у них нет parent или они сами являются регионами)
+        if not parent or parent == 'Россия':
+            # Проверяем, не является ли это областью/краем/республикой по названию
+            city_lower = city_name.lower()
+            is_region = any(keyword in city_lower for keyword in region_keywords)
+            if is_region:
+                continue
         
         # Проверяем, входит ли город в выбранные регионы
         for region in selected_regions:
@@ -189,11 +200,14 @@ def get_cities_by_regions(hh_areas, selected_regions):
     return pd.DataFrame(cities)
  
 def get_all_cities(hh_areas):
-    """Получает все города из справочника HH (только Россия)"""
+    """Получает все города из справочника HH (только Россия, только города)"""
     cities = []
     
     # Список исключений - что не выгружать
     excluded_names = ['Россия', 'Другие регионы', 'Другие страны']
+    
+    # Ключевые слова, которые указывают на регион, а не город
+    region_keywords = ['область', 'край', 'республика', 'округ', 'АО', 'автономный']
     
     # ID России
     russia_id = '113'
@@ -209,6 +223,14 @@ def get_all_cities(hh_areas):
         # Пропускаем исключенные названия
         if city_name in excluded_names:
             continue
+        
+        # Пропускаем области, края, республики (у них нет parent или они сами являются регионами)
+        if not parent or parent == 'Россия':
+            # Проверяем, не является ли это областью/краем/республикой по названию
+            city_lower = city_name.lower()
+            is_region = any(keyword in city_lower for keyword in region_keywords)
+            if is_region:
+                continue
         
         cities.append({
             'Город': city_name,
@@ -1069,4 +1091,5 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
+
 
