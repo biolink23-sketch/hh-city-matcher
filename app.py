@@ -150,6 +150,10 @@ def get_cities_by_regions(hh_areas, selected_regions):
     for city_name, city_info in hh_areas.items():
         parent = city_info['parent']
         
+        # Пропускаем записи без родительского региона (это страны верхнего уровня)
+        if not parent or parent.strip() == "":
+            continue
+        
         # Пропускаем исключенные названия
         if city_name in excluded_names or parent in excluded_names:
             continue
@@ -966,3 +970,4 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
+
