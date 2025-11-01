@@ -175,10 +175,6 @@ def get_cities_by_regions(hh_areas, selected_regions):
         if city_name in excluded_names:
             continue
         
-        # Пропускаем записи с "дубликат" в названии
-        if 'дубликат' in city_name.lower():
-            continue
-        
         # Пропускаем области, края, республики
         if not parent or parent == 'Россия':
             # Проверяем, не является ли это областью/краем/республикой по названию
@@ -213,9 +209,14 @@ def get_cities_by_regions(hh_areas, selected_regions):
     # Создаем DataFrame
     df = pd.DataFrame(cities)
     
-    # Удаляем дубликаты по названию города, оставляем первое вхождение
+    # Удаляем дубликаты по названию города (без учета регистра), оставляем первое вхождение
     if not df.empty:
-        df = df.drop_duplicates(subset=['Город'], keep='first')
+        # Создаем временную колонку для сравнения в нижнем регистре
+        df['_город_lower'] = df['Город'].str.lower().str.strip()
+        # Удаляем дубликаты
+        df = df.drop_duplicates(subset=['_город_lower'], keep='first')
+        # Удаляем временную колонку
+        df = df.drop(columns=['_город_lower'])
     
     return df
  
@@ -249,10 +250,6 @@ def get_all_cities(hh_areas):
         if city_name in excluded_names:
             continue
         
-        # Пропускаем записи с "дубликат" в названии
-        if 'дубликат' in city_name.lower():
-            continue
-        
         # Пропускаем области, края, республики
         if not parent or parent == 'Россия':
             # Проверяем, не является ли это областью/краем/республикой по названию
@@ -274,9 +271,14 @@ def get_all_cities(hh_areas):
     # Создаем DataFrame
     df = pd.DataFrame(cities)
     
-    # Удаляем дубликаты по названию города, оставляем первое вхождение
+    # Удаляем дубликаты по названию города (без учета регистра), оставляем первое вхождение
     if not df.empty:
-        df = df.drop_duplicates(subset=['Город'], keep='first')
+        # Создаем временную колонку для сравнения в нижнем регистре
+        df['_город_lower'] = df['Город'].str.lower().str.strip()
+        # Удаляем дубликаты
+        df = df.drop_duplicates(subset=['_город_lower'], keep='first')
+        # Удаляем временную колонку
+        df = df.drop(columns=['_город_lower'])
     
     return df
 
@@ -1131,6 +1133,7 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
+
 
 
 
