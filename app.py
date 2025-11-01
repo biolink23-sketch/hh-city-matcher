@@ -144,17 +144,17 @@ def get_hh_areas():
       
     parse_areas(data)  
     return areas_dict  
- 
+
 def get_cities_by_regions(hh_areas, selected_regions):
     """Получает все города из выбранных регионов (только Россия, только города)"""
     cities = []
     
-    # Список исключений - что не выгружать (точные совпадения)
-    excluded_names = [
-        'Россия', 'Другие регионы', 'Другие страны',
-        'Чукотский АО', 'Ямало-Ненецкий АО', 'Ненецкий АО', 
-        'Ханты-Мансийский АО - Югра', 'Еврейская АО',
-        'Беловское', 'Горькая Балка'
+    # Список исключений - что не выгружать (нормализованные названия в нижнем регистре)
+    excluded_names_normalized = [
+        'россия', 'другие регионы', 'другие страны',
+        'чукотский ао', 'ямало-ненецкий ао', 'ненецкий ао', 
+        'ханты-мансийский ао - югра', 'еврейская ао',
+        'беловское', 'горькая балка'
     ]
     
     # Ключевые слова, которые указывают на регион, а не город
@@ -171,15 +171,17 @@ def get_cities_by_regions(hh_areas, selected_regions):
         if root_parent_id != russia_id:
             continue
         
-        # Пропускаем исключенные названия (точное совпадение)
-        if city_name in excluded_names:
+        # Нормализуем название для проверки исключений
+        city_name_normalized = city_name.lower().strip()
+        
+        # Пропускаем исключенные названия (нормализованное сравнение)
+        if city_name_normalized in excluded_names_normalized:
             continue
         
         # Пропускаем области, края, республики
         if not parent or parent == 'Россия':
             # Проверяем, не является ли это областью/краем/республикой по названию
-            city_lower = city_name.lower()
-            is_region = any(keyword in city_lower for keyword in region_keywords)
+            is_region = any(keyword in city_name_normalized for keyword in region_keywords)
             if is_region:
                 continue
             
@@ -192,13 +194,12 @@ def get_cities_by_regions(hh_areas, selected_regions):
             # Нормализуем названия для сравнения
             region_normalized = region.lower().strip()
             parent_normalized = parent.lower().strip() if parent else ""
-            city_normalized = city_name.lower().strip()
             
             # Проверяем различные варианты совпадений
             if (region_normalized in parent_normalized or 
                 parent_normalized in region_normalized or
                 region_normalized == parent_normalized or
-                region_normalized == city_normalized):
+                region_normalized == city_name_normalized):
                 cities.append({
                     'Город': city_name,
                     'ID HH': city_info['id'],
@@ -209,14 +210,14 @@ def get_cities_by_regions(hh_areas, selected_regions):
     # Создаем DataFrame
     df = pd.DataFrame(cities)
     
-    # Удаляем дубликаты по названию города (без учета регистра), оставляем первое вхождение
+    # Удаляем дубликаты по названию города (без учета регистра и пробелов), оставляем первое вхождение
     if not df.empty:
-        # Создаем временную колонку для сравнения в нижнем регистре
-        df['_город_lower'] = df['Город'].str.lower().str.strip()
+        # Создаем временную колонку для сравнения: нижний регистр + удаление лишних пробелов
+        df['_город_normalized'] = df['Город'].str.lower().str.strip().str.replace(r'\s+', ' ', regex=True)
         # Удаляем дубликаты
-        df = df.drop_duplicates(subset=['_город_lower'], keep='first')
+        df = df.drop_duplicates(subset=['_город_normalized'], keep='first')
         # Удаляем временную колонку
-        df = df.drop(columns=['_город_lower'])
+        df = df.drop(columns=['_город_normalized'])
     
     return df
 
@@ -224,12 +225,12 @@ def get_all_cities(hh_areas):
     """Получает все города из справочника HH (только Россия, только города)"""
     cities = []
     
-    # Список исключений - что не выгружать (точные совпадения)
-    excluded_names = [
-        'Россия', 'Другие регионы', 'Другие страны',
-        'Чукотский АО', 'Ямало-Ненецкий АО', 'Ненецкий АО', 
-        'Ханты-Мансийский АО - Югра', 'Еврейская АО',
-        'Беловское', 'Горькая Балка'
+    # Список исключений - что не выгружать (нормализованные названия в нижнем регистре)
+    excluded_names_normalized = [
+        'россия', 'другие регионы', 'другие страны',
+        'чукотский ао', 'ямало-ненецкий ао', 'ненецкий ао', 
+        'ханты-мансийский ао - югра', 'еврейская ао',
+        'беловское', 'горькая балка'
     ]
     
     # Ключевые слова, которые указывают на регион, а не город
@@ -246,15 +247,17 @@ def get_all_cities(hh_areas):
         if root_parent_id != russia_id:
             continue
         
-        # Пропускаем исключенные названия (точное совпадение)
-        if city_name in excluded_names:
+        # Нормализуем название для проверки исключений
+        city_name_normalized = city_name.lower().strip()
+        
+        # Пропускаем исключенные названия (нормализованное сравнение)
+        if city_name_normalized in excluded_names_normalized:
             continue
         
         # Пропускаем области, края, республики
         if not parent or parent == 'Россия':
             # Проверяем, не является ли это областью/краем/республикой по названию
-            city_lower = city_name.lower()
-            is_region = any(keyword in city_lower for keyword in region_keywords)
+            is_region = any(keyword in city_name_normalized for keyword in region_keywords)
             if is_region:
                 continue
             
@@ -271,76 +274,14 @@ def get_all_cities(hh_areas):
     # Создаем DataFrame
     df = pd.DataFrame(cities)
     
-    # Удаляем дубликаты по названию города (без учета регистра), оставляем первое вхождение
+    # Удаляем дубликаты по названию города (без учета регистра и пробелов), оставляем первое вхождение
     if not df.empty:
-        # Создаем временную колонку для сравнения в нижнем регистре
-        df['_город_lower'] = df['Город'].str.lower().str.strip()
+        # Создаем временную колонку для сравнения: нижний регистр + удаление лишних пробелов
+        df['_город_normalized'] = df['Город'].str.lower().str.strip().str.replace(r'\s+', ' ', regex=True)
         # Удаляем дубликаты
-        df = df.drop_duplicates(subset=['_город_lower'], keep='first')
+        df = df.drop_duplicates(subset=['_город_normalized'], keep='first')
         # Удаляем временную колонку
-        df = df.drop(columns=['_город_lower'])
-    
-    return df
- 
-def get_all_cities(hh_areas):
-    """Получает все города из справочника HH (только Россия, только города)"""
-    cities = []
-    
-    # Список исключений - что не выгружать (точные совпадения)
-    excluded_names = [
-        'Россия', 'Другие регионы', 'Другие страны',
-        'Чукотский АО', 'Ямало-Ненецкий АО', 'Ненецкий АО', 
-        'Ханты-Мансийский АО - Югра', 'Еврейская АО',
-        'Беловское'
-    ]
-    
-    # Ключевые слова, которые указывают на регион, а не город
-    region_keywords = ['область', 'край', 'республика', 'округ', 'автономн']
-    
-    # ID России
-    russia_id = '113'
-    
-    for city_name, city_info in hh_areas.items():
-        parent = city_info['parent']
-        root_parent_id = city_info.get('root_parent_id', '')
-        
-        # Пропускаем всё, что не относится к России
-        if root_parent_id != russia_id:
-            continue
-        
-        # Пропускаем исключенные названия (точное совпадение)
-        if city_name in excluded_names:
-            continue
-        
-        # Пропускаем области, края, республики
-        if not parent or parent == 'Россия':
-            # Проверяем, не является ли это областью/краем/республикой по названию
-            city_lower = city_name.lower()
-            is_region = any(keyword in city_lower for keyword in region_keywords)
-            if is_region:
-                continue
-            
-            # Дополнительная проверка: если название заканчивается на "АО" и это не город
-            if city_name.endswith(' АО') or city_name.endswith('АО'):
-                continue
-        
-        cities.append({
-            'Город': city_name,
-            'ID HH': city_info['id'],
-            'Регион': parent if parent else 'Россия'
-        })
-    
-    # Создаем DataFrame
-    df = pd.DataFrame(cities)
-    
-    # Удаляем дубликаты по названию города (без учета регистра), оставляем первое вхождение
-    if not df.empty:
-        # Создаем временную колонку для сравнения в нижнем регистре
-        df['_город_lower'] = df['Город'].str.lower().str.strip()
-        # Удаляем дубликаты
-        df = df.drop_duplicates(subset=['_город_lower'], keep='first')
-        # Удаляем временную колонку
-        df = df.drop(columns=['_город_lower'])
+        df = df.drop(columns=['_город_normalized'])
     
     return df
 
@@ -1195,9 +1136,3 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
-
-
-
-
-
-
