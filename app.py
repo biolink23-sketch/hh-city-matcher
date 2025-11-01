@@ -123,47 +123,49 @@ def get_hh_areas():
       
     areas_dict = {}  
       
-    def parse_areas(areas, parent_name="", parent_id=""):  
+    def parse_areas(areas, parent_name="", parent_id="", root_parent_id=""):  
         for area in areas:  
             area_id = area['id']  
             area_name = area['name']  
+            
+            # Определяем корневой parent_id (страну)
+            current_root_id = root_parent_id if root_parent_id else parent_id if parent_id else area_id
               
             areas_dict[area_name] = {  
                 'id': area_id,  
                 'name': area_name,  
                 'parent': parent_name,
-                'parent_id': parent_id
+                'parent_id': parent_id,
+                'root_parent_id': current_root_id  # ID страны верхнего уровня
             }  
               
             if area.get('areas'):  
-                parse_areas(area['areas'], area_name, area_id)  
+                parse_areas(area['areas'], area_name, area_id, current_root_id)  
       
     parse_areas(data)  
     return areas_dict  
-
+ 
 def get_cities_by_regions(hh_areas, selected_regions):
-    """Получает все города из выбранных регионов"""
+    """Получает все города из выбранных регионов (только Россия)"""
     cities = []
     
     # Список исключений - что не выгружать
     excluded_names = ['Россия', 'Другие регионы', 'Другие страны']
     
-    # ID родителей, которые нужно включить (Россия = 113)
-    allowed_parent_ids = ['113']
+    # ID России
+    russia_id = '113'
     
     for city_name, city_info in hh_areas.items():
         parent = city_info['parent']
-        parent_id = city_info.get('parent_id', '')
+        root_parent_id = city_info.get('root_parent_id', '')
         
-        # Пропускаем исключенные названия
-        if city_name in excluded_names or parent in excluded_names:
+        # Пропускаем всё, что не относится к России
+        if root_parent_id != russia_id:
             continue
         
-        # Если parent пустой, проверяем parent_id
-        if not parent or parent.strip() == "":
-            # Если parent_id не в списке разрешенных, пропускаем
-            if parent_id not in allowed_parent_ids:
-                continue
+        # Пропускаем исключенные названия
+        if city_name in excluded_names:
+            continue
         
         # Проверяем, входит ли город в выбранные регионы
         for region in selected_regions:
@@ -185,30 +187,28 @@ def get_cities_by_regions(hh_areas, selected_regions):
                 break
     
     return pd.DataFrame(cities)
-
+ 
 def get_all_cities(hh_areas):
-    """Получает все города из справочника HH"""
+    """Получает все города из справочника HH (только Россия)"""
     cities = []
     
     # Список исключений - что не выгружать
     excluded_names = ['Россия', 'Другие регионы', 'Другие страны']
     
-    # ID родителей, которые нужно включить (Россия = 113)
-    allowed_parent_ids = ['113']
+    # ID России
+    russia_id = '113'
     
     for city_name, city_info in hh_areas.items():
         parent = city_info['parent']
-        parent_id = city_info.get('parent_id', '')
+        root_parent_id = city_info.get('root_parent_id', '')
         
-        # Пропускаем исключенные названия
-        if city_name in excluded_names or parent in excluded_names:
+        # Пропускаем всё, что не относится к России
+        if root_parent_id != russia_id:
             continue
         
-        # Если parent пустой, проверяем parent_id
-        if not parent or parent.strip() == "":
-            # Если parent_id не в списке разрешенных, пропускаем
-            if parent_id not in allowed_parent_ids:
-                continue
+        # Пропускаем исключенные названия
+        if city_name in excluded_names:
+            continue
         
         cities.append({
             'Город': city_name,
@@ -1069,3 +1069,4 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
+
