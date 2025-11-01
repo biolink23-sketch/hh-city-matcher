@@ -123,7 +123,7 @@ def get_hh_areas():
       
     areas_dict = {}  
       
-    def parse_areas(areas, parent_name=""):  
+    def parse_areas(areas, parent_name="", parent_id=""):  
         for area in areas:  
             area_id = area['id']  
             area_name = area['name']  
@@ -131,11 +131,12 @@ def get_hh_areas():
             areas_dict[area_name] = {  
                 'id': area_id,  
                 'name': area_name,  
-                'parent': parent_name  
+                'parent': parent_name,
+                'parent_id': parent_id
             }  
               
             if area.get('areas'):  
-                parse_areas(area['areas'], area_name)  
+                parse_areas(area['areas'], area_name, area_id)  
       
     parse_areas(data)  
     return areas_dict  
@@ -147,33 +148,73 @@ def get_cities_by_regions(hh_areas, selected_regions):
     # Список исключений - что не выгружать
     excluded_names = ['Россия', 'Другие регионы', 'Другие страны']
     
+    # ID родителей, которые нужно включить (Россия = 113)
+    allowed_parent_ids = ['113']
+    
     for city_name, city_info in hh_areas.items():
         parent = city_info['parent']
-        
-        # Пропускаем записи без родительского региона (это страны верхнего уровня)
-        if not parent or parent.strip() == "":
-            continue
+        parent_id = city_info.get('parent_id', '')
         
         # Пропускаем исключенные названия
         if city_name in excluded_names or parent in excluded_names:
             continue
         
+        # Если parent пустой, проверяем parent_id
+        if not parent or parent.strip() == "":
+            # Если parent_id не в списке разрешенных, пропускаем
+            if parent_id not in allowed_parent_ids:
+                continue
+        
         # Проверяем, входит ли город в выбранные регионы
         for region in selected_regions:
             # Нормализуем названия для сравнения
             region_normalized = region.lower().strip()
-            parent_normalized = parent.lower().strip()
+            parent_normalized = parent.lower().strip() if parent else ""
+            city_normalized = city_name.lower().strip()
             
             # Проверяем различные варианты совпадений
             if (region_normalized in parent_normalized or 
                 parent_normalized in region_normalized or
-                region_normalized == parent_normalized):
+                region_normalized == parent_normalized or
+                region_normalized == city_normalized):
                 cities.append({
                     'Город': city_name,
                     'ID HH': city_info['id'],
-                    'Регион': parent
+                    'Регион': parent if parent else 'Россия'
                 })
                 break
+    
+    return pd.DataFrame(cities)
+
+def get_all_cities(hh_areas):
+    """Получает все города из справочника HH"""
+    cities = []
+    
+    # Список исключений - что не выгружать
+    excluded_names = ['Россия', 'Другие регионы', 'Другие страны']
+    
+    # ID родителей, которые нужно включить (Россия = 113)
+    allowed_parent_ids = ['113']
+    
+    for city_name, city_info in hh_areas.items():
+        parent = city_info['parent']
+        parent_id = city_info.get('parent_id', '')
+        
+        # Пропускаем исключенные названия
+        if city_name in excluded_names or parent in excluded_names:
+            continue
+        
+        # Если parent пустой, проверяем parent_id
+        if not parent or parent.strip() == "":
+            # Если parent_id не в списке разрешенных, пропускаем
+            if parent_id not in allowed_parent_ids:
+                continue
+        
+        cities.append({
+            'Город': city_name,
+            'ID HH': city_info['id'],
+            'Регион': parent if parent else 'Россия'
+        })
     
     return pd.DataFrame(cities)
 
@@ -514,111 +555,7 @@ except Exception as e:
     hh_areas = None  
 
 # ============================================
-# НОВЫЙ БЛОК: ВЫБОР РЕГИОНОВ
-# ============================================
-st.header("🗺️ Выбор регионов")
-st.markdown("Выберите федеральные округа и области для получения списка всех городов")
-
-if hh_areas is not None:
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Федеральные округа")
-        selected_districts = st.multiselect(
-            "Выберите федеральные округа:",
-            options=list(FEDERAL_DISTRICTS.keys()),
-            help="Можно выбрать несколько округов"
-        )
-    
-    # Формируем список доступных регионов на основе выбранных округов
-    available_regions = []
-    if selected_districts:
-        for district in selected_districts:
-            available_regions.extend(FEDERAL_DISTRICTS[district])
-    else:
-        # Если округа не выбраны, показываем все регионы
-        for regions in FEDERAL_DISTRICTS.values():
-            available_regions.extend(regions)
-    
-    with col2:
-        st.subheader("Области/Регионы")
-        selected_regions = st.multiselect(
-            "Выберите области/регионы:",
-            options=sorted(available_regions),
-            help="Можно выбрать несколько регионов"
-        )
-    
-    # Определяем, какие регионы использовать для поиска
-    regions_to_search = []
-    
-    # Если выбраны конкретные регионы, используем их
-    if selected_regions:
-        regions_to_search = selected_regions
-    # Если выбраны только округа (без конкретных регионов), берем все регионы из этих округов
-    elif selected_districts:
-        for district in selected_districts:
-            regions_to_search.extend(FEDERAL_DISTRICTS[district])
-    
-    # Показываем кнопку только если что-то выбрано
-    if regions_to_search:
-        # Информация о выборе
-        if selected_regions:
-            st.info(f"📍 Выбрано регионов: **{len(selected_regions)}**")
-        elif selected_districts:
-            st.info(f"📍 Выбрано округов: **{len(selected_districts)}** (включает {len(regions_to_search)} регионов)")
-        
-        if st.button("🔍 Получить список городов", type="primary", use_container_width=True):
-            with st.spinner("Формирую список городов..."):
-                cities_df = get_cities_by_regions(hh_areas, regions_to_search)
-                
-                if not cities_df.empty:
-                    st.success(f"✅ Найдено **{len(cities_df)}** городов в выбранных регионах")
-                    
-                    # Показываем таблицу
-                    st.dataframe(cities_df, use_container_width=True, height=400)
-                    
-                    # Кнопки для скачивания
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # Полный отчет
-                        output_full = io.BytesIO()
-                        with pd.ExcelWriter(output_full, engine='openpyxl') as writer:
-                            cities_df.to_excel(writer, index=False, sheet_name='Города')
-                        output_full.seek(0)
-                        
-                        st.download_button(
-                            label=f"📥 Скачать полный отчет ({len(cities_df)} городов)",
-                            data=output_full,
-                            file_name="cities_full_report.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
-                        )
-                    
-                    with col2:
-                        # Только названия городов для публикатора
-                        publisher_df = pd.DataFrame({'Город': cities_df['Город']})
-                        output_publisher = io.BytesIO()
-                        with pd.ExcelWriter(output_publisher, engine='openpyxl') as writer:
-                            publisher_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
-                        output_publisher.seek(0)
-                        
-                        st.download_button(
-                            label=f"📤 Для публикатора ({len(cities_df)} городов)",
-                            data=output_publisher,
-                            file_name="cities_for_publisher.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True
-                        )
-                else:
-                    st.warning("⚠️ Города не найдены в выбранных регионах")
-    else:
-        st.info("👆 Выберите федеральные округа или конкретные регионы для получения списка городов")
-
-st.markdown("---")
-
-# ============================================
-# ОРИГИНАЛЬНЫЙ БЛОК: СИНХРОНИЗАТОР
+# БЛОК: СИНХРОНИЗАТОР ГОРОДОВ
 # ============================================
 st.header("📤 Синхронизатор городов")
 
@@ -965,9 +902,170 @@ if uploaded_file is not None and hh_areas is not None:
         import traceback  
         st.code(traceback.format_exc())  
 
+st.markdown("---")
+
+# ============================================
+# БЛОК: ВЫБОР РЕГИОНОВ
+# ============================================
+st.header("🗺️ Выбор регионов")
+st.markdown("Выберите федеральные округа и области для получения списка всех городов")
+
+if hh_areas is not None:
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Федеральные округа")
+        selected_districts = st.multiselect(
+            "Выберите федеральные округа:",
+            options=list(FEDERAL_DISTRICTS.keys()),
+            help="Можно выбрать несколько округов",
+            key="districts_select"
+        )
+    
+    # Формируем список доступных регионов на основе выбранных округов
+    available_regions = []
+    if selected_districts:
+        for district in selected_districts:
+            available_regions.extend(FEDERAL_DISTRICTS[district])
+    else:
+        # Если округа не выбраны, показываем все регионы
+        for regions in FEDERAL_DISTRICTS.values():
+            available_regions.extend(regions)
+    
+    with col2:
+        st.subheader("Области/Регионы")
+        selected_regions = st.multiselect(
+            "Выберите области/регионы:",
+            options=sorted(available_regions),
+            help="Можно выбрать несколько регионов",
+            key="regions_select"
+        )
+    
+    # Определяем, какие регионы использовать для поиска
+    regions_to_search = []
+    
+    # Если выбраны конкретные регионы, используем их
+    if selected_regions:
+        regions_to_search = selected_regions
+    # Если выбраны только округа (без конкретных регионов), берем все регионы из этих округов
+    elif selected_districts:
+        for district in selected_districts:
+            regions_to_search.extend(FEDERAL_DISTRICTS[district])
+    
+    # Кнопки действий
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        # Показываем кнопку только если что-то выбрано
+        if regions_to_search:
+            # Информация о выборе
+            if selected_regions:
+                st.info(f"📍 Выбрано регионов: **{len(selected_regions)}**")
+            elif selected_districts:
+                st.info(f"📍 Выбрано округов: **{len(selected_districts)}** (включает {len(regions_to_search)} регионов)")
+            
+            if st.button("🔍 Получить список городов по регионам", type="primary", use_container_width=True):
+                with st.spinner("Формирую список городов..."):
+                    cities_df = get_cities_by_regions(hh_areas, regions_to_search)
+                    
+                    if not cities_df.empty:
+                        st.success(f"✅ Найдено **{len(cities_df)}** городов в выбранных регионах")
+                        
+                        # Показываем таблицу
+                        st.dataframe(cities_df, use_container_width=True, height=400)
+                        
+                        # Кнопки для скачивания
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            # Полный отчет
+                            output_full = io.BytesIO()
+                            with pd.ExcelWriter(output_full, engine='openpyxl') as writer:
+                                cities_df.to_excel(writer, index=False, sheet_name='Города')
+                            output_full.seek(0)
+                            
+                            st.download_button(
+                                label=f"📥 Скачать полный отчет ({len(cities_df)} городов)",
+                                data=output_full,
+                                file_name="cities_full_report.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="download_regions_full"
+                            )
+                        
+                        with col2:
+                            # Только названия городов для публикатора
+                            publisher_df = pd.DataFrame({'Город': cities_df['Город']})
+                            output_publisher = io.BytesIO()
+                            with pd.ExcelWriter(output_publisher, engine='openpyxl') as writer:
+                                publisher_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
+                            output_publisher.seek(0)
+                            
+                            st.download_button(
+                                label=f"📤 Для публикатора ({len(cities_df)} городов)",
+                                data=output_publisher,
+                                file_name="cities_for_publisher.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="download_regions_publisher"
+                            )
+                    else:
+                        st.warning("⚠️ Города не найдены в выбранных регионах")
+        else:
+            st.info("👆 Выберите федеральные округа или конкретные регионы для получения списка городов")
+    
+    with col_btn2:
+        # Кнопка для выгрузки всех городов
+        if st.button("🌍 Выгрузить ВСЕ города из справочника", type="secondary", use_container_width=True):
+            with st.spinner("Формирую полный список городов..."):
+                all_cities_df = get_all_cities(hh_areas)
+                
+                if not all_cities_df.empty:
+                    st.success(f"✅ Найдено **{len(all_cities_df)}** городов в справочнике HH.ru")
+                    
+                    # Показываем таблицу
+                    st.dataframe(all_cities_df, use_container_width=True, height=400)
+                    
+                    # Кнопки для скачивания
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Полный отчет
+                        output_all_full = io.BytesIO()
+                        with pd.ExcelWriter(output_all_full, engine='openpyxl') as writer:
+                            all_cities_df.to_excel(writer, index=False, sheet_name='Города')
+                        output_all_full.seek(0)
+                        
+                        st.download_button(
+                            label=f"📥 Скачать полный отчет ({len(all_cities_df)} городов)",
+                            data=output_all_full,
+                            file_name="all_cities_full_report.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key="download_all_full"
+                        )
+                    
+                    with col2:
+                        # Только названия городов для публикатора
+                        publisher_all_df = pd.DataFrame({'Город': all_cities_df['Город']})
+                        output_all_publisher = io.BytesIO()
+                        with pd.ExcelWriter(output_all_publisher, engine='openpyxl') as writer:
+                            publisher_all_df.to_excel(writer, index=False, header=False, sheet_name='Гео')
+                        output_all_publisher.seek(0)
+                        
+                        st.download_button(
+                            label=f"📤 Для публикатора ({len(all_cities_df)} городов)",
+                            data=output_all_publisher,
+                            file_name="all_cities_for_publisher.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key="download_all_publisher"
+                        )
+                else:
+                    st.warning("⚠️ Не удалось получить список городов")
+
 st.markdown("---")  
 st.markdown(  
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
-
