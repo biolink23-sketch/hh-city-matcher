@@ -154,7 +154,7 @@ def get_cities_by_regions(hh_areas, selected_regions):
         'Россия', 'Другие регионы', 'Другие страны',
         'Чукотский АО', 'Ямало-Ненецкий АО', 'Ненецкий АО', 
         'Ханты-Мансийский АО - Югра', 'Еврейская АО',
-        'Беловское', 'Горькая Балка: дубликат!'
+        'Беловское'
     ]
     
     # Ключевые слова, которые указывают на регион, а не город
@@ -210,7 +210,14 @@ def get_cities_by_regions(hh_areas, selected_regions):
                 })
                 break
     
-    return pd.DataFrame(cities)
+    # Создаем DataFrame
+    df = pd.DataFrame(cities)
+    
+    # Удаляем дубликаты по названию города, оставляем первое вхождение
+    if not df.empty:
+        df = df.drop_duplicates(subset=['Город'], keep='first')
+    
+    return df
  
 def get_all_cities(hh_areas):
     """Получает все города из справочника HH (только Россия, только города)"""
@@ -221,7 +228,7 @@ def get_all_cities(hh_areas):
         'Россия', 'Другие регионы', 'Другие страны',
         'Чукотский АО', 'Ямало-Ненецкий АО', 'Ненецкий АО', 
         'Ханты-Мансийский АО - Югра', 'Еврейская АО',
-        'Беловское', 'Горькая Балка: дубликат!'
+        'Беловское'
     ]
     
     # Ключевые слова, которые указывают на регион, а не город
@@ -264,7 +271,14 @@ def get_all_cities(hh_areas):
             'Регион': parent if parent else 'Россия'
         })
     
-    return pd.DataFrame(cities)
+    # Создаем DataFrame
+    df = pd.DataFrame(cities)
+    
+    # Удаляем дубликаты по названию города, оставляем первое вхождение
+    if not df.empty:
+        df = df.drop_duplicates(subset=['Город'], keep='first')
+    
+    return df
 
 def normalize_region_name(text):  
     """Нормализует название региона для сравнения"""  
@@ -1117,6 +1131,7 @@ st.markdown(
     "Сделано с ❤️ | Данные из API HH.ru",  
     unsafe_allow_html=True  
 )
+
 
 
 
